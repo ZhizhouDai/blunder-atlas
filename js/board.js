@@ -27,6 +27,7 @@ class Board {
     this.lastMove = null; // {from,to}
     this.previewChess = null;
     this.previewArrows = null;
+    this.hintArrow = null; // {from,to} — a suggested move overlaid on the live position
     this.squares = {};
     this._buildDom();
   }
@@ -46,6 +47,7 @@ class Board {
     this.lastMove = null;
     this.previewChess = null;
     this.previewArrows = null;
+    this.hintArrow = null;
     this._render({ animate: false });
   }
 
@@ -58,6 +60,7 @@ class Board {
       this.selected = null;
       this.legalTargets = [];
       this.lastMove = { from, to };
+      this.hintArrow = null;
       this._render({ animate: true });
     }
     return applied;
@@ -69,6 +72,7 @@ class Board {
   showPreview(fen, arrows) {
     this.previewChess = new Chess(fen);
     this.previewArrows = arrows || [];
+    this.hintArrow = null;
     this._render({ animate: false });
   }
 
@@ -76,6 +80,19 @@ class Board {
     this.previewChess = null;
     this.previewArrows = null;
     this._render({ animate: false });
+  }
+
+  // Overlays a suggested move on the live (non-preview) position without
+  // playing it — used for the "show best move" hint in exploration.
+  showHint(uci) {
+    this.hintArrow = { from: uci.slice(0, 2), to: uci.slice(2, 4) };
+    this._render();
+  }
+
+  clearHint() {
+    if (!this.hintArrow) return;
+    this.hintArrow = null;
+    this._render();
   }
 
   get isPreviewing() {
@@ -108,11 +125,14 @@ class Board {
       }
     }
 
-    const arrows = this.previewArrows !== null
+    const baseArrows = this.previewArrows !== null
       ? this.previewArrows
       : (this.lastMove ? [{ from: this.lastMove.from, to: this.lastMove.to, kind: 'last' }] : []);
     const arrowSquares = new Set();
-    arrows.forEach((a) => { arrowSquares.add(a.from); arrowSquares.add(a.to); });
+    baseArrows.forEach((a) => { arrowSquares.add(a.from); arrowSquares.add(a.to); });
+    const arrows = (this.previewArrows === null && this.hintArrow)
+      ? baseArrows.concat([{ from: this.hintArrow.from, to: this.hintArrow.to, kind: 'best' }])
+      : baseArrows;
 
     const order = this._squareOrder();
     order.forEach((sq, idx) => {

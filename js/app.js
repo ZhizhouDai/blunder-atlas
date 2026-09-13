@@ -509,6 +509,7 @@ function wireSolve() {
   el('solveLabelInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addLabelToCurrentPuzzle(); } });
   el('btnSaveBranch').addEventListener('click', () => finalizeBranch(true));
   el('btnDiscardBranch').addEventListener('click', () => finalizeBranch(false));
+  el('btnShowHint').addEventListener('click', showBranchHint);
   el('btnBackToPuzzle').addEventListener('click', exitBranchReview);
   el('btnChangePracticeSet').addEventListener('click', changePracticeSet);
 }
@@ -614,6 +615,7 @@ function setSolveMode(mode) {
     renderSolveMeta();
     updateSolveProgress();
   }
+  updateHintButton();
 }
 
 // Builds "12. Nf3" / "12… Bg4" style labels from a starting move number/side
@@ -635,6 +637,7 @@ function buildMoveLabels(startMoveNumber, startSide, sanList) {
 function pushHistory(san, uci) {
   solveState.history.push({ fen: solveState.board.chess.fen(), san, uci });
   renderMoveNav();
+  updateHintButton();
 }
 
 function renderMoveNav() {
@@ -675,6 +678,7 @@ function viewHistoryIndex(idx) {
     solveState.board.showPreview(entry.fen, arrows);
   }
   renderMoveNav();
+  updateHintButton();
 }
 
 // Forks a brand-new line starting from whatever position is currently being
@@ -916,6 +920,58 @@ function scheduleEngineReplyInBranch() {
       if (applied) pushHistory(applied.san, res.bestMoveUci);
     }
   }, 450);
+}
+
+// ---------- Exploration hint ----------
+// Lets the user ask the engine what it would play next for their own side
+// while exploring — shown as an overlay arrow, without committing the move.
+// Only makes sense on the live position, in branch mode, and when it's
+// actually the player's turn (the engine's own reply is scheduled and
+// applied automatically, so there's nothing to hint at on its turn).
+function branchHintAvailable() {
+  return !!(solveState && solveState.branchMode && solveState.viewingIndex === null &&
+    !solveState.board.isPreviewing && !solveState.board.chess.game_over() &&
+    solveState.board.chess.turn() === solveState.puzzle.sideToMove);
+}
+
+function updateHintButton() {
+  const btn = el('btnShowHint');
+  if (!btn) return;
+  btn.disabled = !branchHintAvailable();
+  el('hintMoveLabel').textContent = '';
+}
+
+async function showBranchHint() {
+  if (!branchHintAvailable()) return;
+  const board = solveState.board;
+  const label = el('hintMoveLabel');
+  const btn = el('btnShowHint');
+
+  if (board.hintArrow) { board.clearHint(); label.textContent = ''; return; }
+
+  const puzzleId = solveState.puzzle.id;
+  const fen = board.chess.fen();
+  btn.disabled = true;
+  label.textContent = 'Thinking…';
+
+  let res;
+  try {
+    res = await engine.analyze(fen, { movetimeMs: 700 });
+  } catch (e) {
+    label.textContent = '';
+    btn.disabled = !branchHintAvailable();
+    return;
+  }
+  // Bail out if the position moved on while we were waiting on the engine.
+  if (!solveState || solveState.puzzle.id !== puzzleId || solveState.board.chess.fen() !== fen) return;
+
+  if (res.bestMoveUci) {
+    board.showHint(res.bestMoveUci);
+    label.textContent = `Best: ${uciToSanAt(fen, res.bestMoveUci) || res.bestMoveUci}`;
+  } else {
+    label.textContent = 'No move found.';
+  }
+  btn.disabled = !branchHintAvailable();
 }
 
 // Ends the current exploration. If `save` is true (and at least one move was
