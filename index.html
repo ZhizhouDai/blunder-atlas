@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#eef1e3" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Blunder Atlas" />
+<title>Blunder Atlas</title>
+<link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">♟</span>
+    <span class="brand-name">Blunder Atlas</span>
+  </div>
+  <nav class="tabs" id="nav">
+    <button class="tab-btn active" data-view="import">Import</button>
+    <button class="tab-btn" data-view="library">Puzzles</button>
+    <button class="tab-btn" data-view="solve">Practice</button>
+    <button class="tab-btn" data-view="stats">History</button>
+  </nav>
+  <select class="nav-select" id="navSelect" title="Navigate">
+    <option value="import">Import</option>
+    <option value="library">Puzzles</option>
+    <option value="solve">Practice</option>
+    <option value="stats">History</option>
+  </select>
+</header>
+
+<main>
+
+  <!-- IMPORT VIEW -->
+  <section id="view-import" class="view active">
+    <div class="panel intro-panel">
+      <h1 class="page-title">Map your mistakes.</h1>
+      <p class="page-sub">Pull your Chess.com game history, let the engine find where it went wrong, and turn every slip into a puzzle worth revisiting.</p>
+    </div>
+
+    <div class="panel form-panel">
+      <div class="field-row">
+        <label for="username">Chess.com username</label>
+        <input id="username" type="text" placeholder="e.g. magnuscarlsen" autocomplete="off" />
+      </div>
+      <div class="field-row field-row-split">
+        <div class="field-col">
+          <label for="monthsBack">History to import</label>
+          <select id="monthsBack">
+            <option value="day">Last day</option>
+            <option value="week">Last week</option>
+            <option value="1">Last month</option>
+            <option value="3" selected>Last 3 months</option>
+            <option value="6">Last 6 months</option>
+            <option value="12">Last 12 months</option>
+            <option value="999">Everything</option>
+          </select>
+        </div>
+        <div class="field-col">
+          <label for="speedPreset">Analysis depth</label>
+          <select id="speedPreset">
+            <option value="fast">Fast (quick scan)</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="deep">Deep (slower, sharper)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row actions-row">
+        <button id="btnImport" class="btn btn-primary">Import &amp; analyze</button>
+        <button id="btnCancelImport" class="btn btn-ghost" hidden>Cancel</button>
+      </div>
+      <p class="muted" style="margin-top: 14px;">The engine runs in your browser, one position at a time — larger histories take longer. You can cancel mid-run; games already analyzed keep their puzzles.</p>
+    </div>
+
+    <div class="panel progress-panel" id="importProgressPanel" hidden>
+      <div class="progress-line">
+        <span id="importProgressLabel">Working…</span>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="importProgressFill"></div>
+      </div>
+      <div class="progress-line small" id="moveProgressLine"></div>
+      <ul class="import-log" id="importLog"></ul>
+    </div>
+  </section>
+
+  <!-- LIBRARY VIEW -->
+  <section id="view-library" class="view">
+    <div class="library-header">
+      <div class="library-title-row">
+        <h1 class="page-title small">Puzzle library</h1>
+        <button id="btnClearAllPuzzles" class="btn btn-ghost small danger">Delete all puzzles</button>
+      </div>
+      <div class="filter-bar">
+        <div class="filter-group" id="severityFilters">
+          <button class="chip chip-sev blunder active" data-sev="blunder">Blunders</button>
+          <button class="chip chip-sev mistake active" data-sev="mistake">Mistakes</button>
+          <button class="chip chip-sev inaccuracy active" data-sev="inaccuracy">Inaccuracies</button>
+        </div>
+        <div class="filter-group">
+          <select id="statusFilter">
+            <option value="all">All statuses</option>
+            <option value="unsolved">Unsolved</option>
+            <option value="solved">Solved</option>
+            <option value="failed">Attempted, not solved</option>
+          </select>
+          <button class="chip chip-toggle" id="bookmarkedOnly">★ Bookmarked only</button>
+          <select id="sortBy">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="severity">Most severe first</option>
+          </select>
+        </div>
+        <div class="filter-group label-filter-group" id="labelFilterChips"></div>
+      </div>
+    </div>
+
+    <div id="libraryEmpty" class="empty-state" hidden>
+      <p>No puzzles match these filters yet.</p>
+    </div>
+
+    <div id="puzzleGrid" class="puzzle-grid"></div>
+    <div class="load-more-row">
+      <button id="btnLoadMore" class="btn btn-ghost" hidden>Load more</button>
+    </div>
+  </section>
+
+  <!-- SOLVE VIEW -->
+  <section id="view-solve" class="view">
+    <div id="solveEmpty" class="empty-state">
+      <p>No puzzle selected. Head to the <button class="link-btn" id="goToLibraryFromSolve">puzzle library</button> and pick one, or start a practice session.</p>
+      <button id="btnStartSession" class="btn btn-primary">Start session from current filters</button>
+    </div>
+    <div id="solveContent" class="solve-layout" hidden>
+      <div class="solve-board-col">
+        <div class="eval-row">
+          <div class="eval-bar" id="evalBar">
+            <div class="eval-bar-white" id="evalBarWhite"></div>
+            <div class="eval-bar-black" id="evalBarBlack"></div>
+          </div>
+          <div class="eval-label" id="evalLabel">0.0</div>
+        </div>
+        <div id="solveBoard" class="board-mount board-large"></div>
+        <p class="solve-feedback" id="solveFeedback"></p>
+        <div class="solve-controls" id="liveControls">
+          <button id="btnShowSolution" class="btn btn-ghost small">Show solution</button>
+          <button id="btnNextPuzzle" class="btn btn-primary small">Next puzzle →</button>
+        </div>
+        <div class="solve-controls" id="branchControls" hidden>
+          <button id="btnSaveBranch" class="btn btn-primary small">Save this line</button>
+          <button id="btnDiscardBranch" class="btn btn-ghost small">Discard &amp; retry</button>
+        </div>
+        <div class="solve-controls" id="reviewControls" hidden>
+          <button id="btnBackToPuzzle" class="btn btn-primary small">← Back to puzzle</button>
+        </div>
+        <div class="move-nav" id="solveMoveNav"></div>
+
+        <div class="branch-section">
+          <label>Explored lines</label>
+          <div id="branchList" class="branch-list"></div>
+        </div>
+      </div>
+      <div class="solve-side-col">
+        <div class="solve-meta">
+          <span class="chip chip-sev" id="solveSevBadge"></span>
+          <span class="muted" id="solveOpponent"></span>
+        </div>
+        <p class="solve-prompt" id="solvePrompt"></p>
+        <p class="solve-progress" id="solveProgress"></p>
+
+        <div class="solve-actions-row">
+          <button id="btnBookmarkSolve" class="btn btn-ghost small">☆ Bookmark</button>
+          <button id="btnDeleteSolve" class="btn btn-ghost small danger">Delete puzzle</button>
+        </div>
+
+        <div class="label-editor">
+          <label>Labels</label>
+          <div class="label-chips" id="solveLabelChips"></div>
+          <div class="label-add-row">
+            <input id="solveLabelInput" list="knownLabels" placeholder="add a label…" />
+            <button id="btnAddSolveLabel" class="btn btn-ghost small">Add</button>
+          </div>
+        </div>
+
+        <div class="game-link">
+          <a id="solveGameLink" href="#" target="_blank" rel="noopener">View original game on Chess.com ↗</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS VIEW -->
+  <section id="view-stats" class="view">
+    <h1 class="page-title small">Practice history</h1>
+    <div class="stats-summary" id="statsSummary"></div>
+    <div class="stats-columns">
+      <div class="panel">
+        <h2 class="panel-title">By severity</h2>
+        <div id="statsBySeverity"></div>
+      </div>
+      <div class="panel">
+        <h2 class="panel-title">By label</h2>
+        <div id="statsByLabel"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">Recent activity</h2>
+      <ul class="activity-list" id="statsRecent"></ul>
+    </div>
+  </section>
+
+</main>
+
+<datalist id="knownLabels"></datalist>
+<div id="toast" class="toast" hidden></div>
+
+<script src="lib/chess.min.js"></script>
+<script src="js/db.js"></script>
+<script src="js/chessapi.js"></script>
+<script src="js/chessutil.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/analyze.js"></script>
+<script src="js/board.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
