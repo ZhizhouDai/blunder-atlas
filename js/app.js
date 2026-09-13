@@ -510,6 +510,24 @@ function wireSolve() {
   el('btnSaveBranch').addEventListener('click', () => finalizeBranch(true));
   el('btnDiscardBranch').addEventListener('click', () => finalizeBranch(false));
   el('btnBackToPuzzle').addEventListener('click', exitBranchReview);
+  el('btnChangePracticeSet').addEventListener('click', changePracticeSet);
+}
+
+// Lets the user leave the current session mid-puzzle and pick a new
+// filter/order combination from the session-setup panel, without having to
+// finish or abandon the puzzle any other way.
+function changePracticeSet() {
+  const hasUnsavedExploration = solveState && solveState.branchMode && !solveState.reviewingBranch && solveState.history.length > 1;
+  if (hasUnsavedExploration) {
+    const ok = confirm('Switch practice set? Any exploration moves on this puzzle that you haven\'t saved as a line will be lost.');
+    if (!ok) return;
+  }
+  solveSession = { queue: [], index: -1 };
+  solveState = null;
+  el('solveContent').hidden = true;
+  el('solveEmpty').hidden = false;
+  syncFilterControls();
+  updateSessionCount();
 }
 
 async function addLabelToCurrentPuzzle() {
