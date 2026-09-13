@@ -21,8 +21,15 @@ const libraryFilters = {
 let libraryShown = 40;
 const LIBRARY_PAGE = 40;
 
+// A puzzle counts as solved once the player has correctly played this many
+// of their own moves, even if the stored solution line is longer — anything
+// after that point is optional exploration, not required for credit.
+const PLAYER_MOVES_TO_SOLVE = 3;
+
+let sessionOrder = 'newest'; // order for a Practice-tab session: newest/oldest/random/mostWrong
+
 let solveSession = { queue: [], index: -1 };
-let solveState = null; // { puzzle, board, solverIdx, gaveUp, everWrong }
+let solveState = null; // { puzzle, board, solverIdx, gaveUp, branchMode, alreadySolved, ... }
 
 function el(id) { return document.getElementById(id); }
 function escapeHtml(s) {
@@ -54,6 +61,7 @@ function showView(name) {
   el('view-' + name).classList.add('active');
   if (name === 'library') renderLibrary();
   if (name === 'stats') renderStats();
+  if (name === 'solve') { syncFilterControls(); updateSessionCount(); }
 }
 
 function wireNav() {
@@ -256,23 +264,17 @@ async function maybeAutoCheckForNewGames() {
 }
 
 // ================= LIBRARY =================
+// Severity/bookmark/status/label filters are shared (via `libraryFilters`)
+// between the Puzzle library and the Practice tab's session setup panel, so
+// each has its own set of controls but they always stay in sync.
 function wireLibrary() {
   el('severityFilters').addEventListener('click', (e) => {
     const btn = e.target.closest('.chip-sev');
     if (!btn) return;
-    const sev = btn.dataset.sev;
-    if (libraryFilters.severities.has(sev)) libraryFilters.severities.delete(sev);
-    else libraryFilters.severities.add(sev);
-    btn.classList.toggle('active');
-    libraryShown = LIBRARY_PAGE;
-    renderLibrary();
+    toggleSeverityFilter(btn.dataset.sev);
   });
-  el('bookmarkedOnly').addEventListener('click', (e) => {
-    libraryFilters.bookmarkedOnly = !libraryFilters.bookmarkedOnly;
-    e.target.classList.toggle('active', libraryFilters.bookmarkedOnly);
-    renderLibrary();
-  });
-  el('statusFilter').addEventListener('change', (e) => { libraryFilters.status = e.target.value; libraryShown = LIBRARY_PAGE; renderLibrary(); });
+  el('bookmarkedOnly').addEventListener('click', () => toggleBookmarkedOnlyFilter());
+  el('statusFilter').addEventListener('change', (e) => setStatusFilter(e.target.value));
   el('sortBy').addEventListener('change', (e) => { libraryFilters.sort = e.target.value; renderLibrary(); });
   el('btnLoadMore').addEventListener('click', () => { libraryShown += LIBRARY_PAGE; renderLibrary(); });
   el('btnClearAllPuzzles').addEventListener('click', async () => {
@@ -287,34 +289,133 @@ function wireLibrary() {
   });
 }
 
-function renderLabelFilterChips() {
+function wirePracticeSessionFilters() {
+  el('sessionSeverityFilters').addEventListener('click', (e) => {
+    const btn = e.target.closest('.chip-sev');
+    if (!btn) return;
+    toggleSeverityFilter(btn.dataset.sev);
+  });
+  el('sessionBookmarkedOnly').addEventListener('click', () => toggleBookmarkedOnlyFilter());
+  el('sessionStatusFilter').addEventListener('change', (e) => setStatusFilter(e.target.value));
+  el('sessionOrder').addEventListener('change', (e) => { sessionOrder = e.target.value; updateSessionCount(); });
+  el('btnStartSession').addEventListener('click', () => {
+    const queue = getPracticeSessionQueue();
+    if (queue.length === 0) { toast('No puzzles match your current filters.', 'error'); return; }
+    solveSession = { queue, index: 0 };
+    loadPuzzleIntoSolver(solveSession.queue[0]);
+  });
+}
+
+function toggleSeverityFilter(sev) {
+  if (libraryFilters.severities.has(sev)) libraryFilters.severities.delete(sev);
+  else libraryFilters.severities.add(sev);
+  syncFilterControls();
+  libraryShown = LIBRARY_PAGE;
+  renderLibrary();
+  updateSessionCount();
+}
+
+function toggleBookmarkedOnlyFilter() {
+  libraryFilters.bookmarkedOnly = !libraryFilters.bookmarkedOnly;
+  syncFilterControls();
+  renderLibrary();
+  updateSessionCount();
+}
+
+function setStatusFilter(value) {
+  libraryFilters.status = value;
+  syncFilterControls();
+  libraryShown = LIBRARY_PAGE;
+  renderLibrary();
+  updateSessionCount();
+}
+
+// Keeps the library filter bar and the practice-session filter panel showing
+// the same state, no matter which one the user last touched.
+function syncFilterControls() {
+  ['severityFilters', 'sessionSeverityFilters'].forEach((id) => {
+    const c = el(id);
+    if (c) c.querySelectorAll('.chip-sev').forEach((btn) => btn.classList.toggle('active', libraryFilters.severities.has(btn.dataset.sev)));
+  });
+  ['bookmarkedOnly', 'sessionBookmarkedOnly'].forEach((id) => {
+    const b = el(id);
+    if (b) b.classList.toggle('active', libraryFilters.bookmarkedOnly);
+  });
+  ['statusFilter', 'sessionStatusFilter'].forEach((id) => {
+    const s = el(id);
+    if (s) s.value = libraryFilters.status;
+  });
+  renderLabelFilterChipsInto('labelFilterChips');
+  renderLabelFilterChipsInto('sessionLabelFilterChips');
+}
+
+function renderLabelFilterChipsInto(containerId) {
+  const container = el(containerId);
+  if (!container) return;
   const labels = refreshKnownLabels().filter((l) => allPuzzles.some((p) => (p.labels || []).includes(l)));
-  const container = el('labelFilterChips');
   container.innerHTML = labels.map((l) => `<button class="chip chip-label ${libraryFilters.labels.has(l) ? 'active' : ''}" data-label="${escapeHtml(l)}">${escapeHtml(l)}</button>`).join('');
   container.querySelectorAll('.chip-label').forEach((btn) => {
     btn.addEventListener('click', () => {
       const l = btn.dataset.label;
       if (libraryFilters.labels.has(l)) libraryFilters.labels.delete(l); else libraryFilters.labels.add(l);
-      btn.classList.toggle('active');
+      syncFilterControls();
+      libraryShown = LIBRARY_PAGE;
       renderLibrary();
+      updateSessionCount();
     });
   });
 }
 
-function getFilteredPuzzles() {
+function updateSessionCount() {
+  const countEl = el('sessionCount');
+  if (!countEl) return;
+  const n = getFilteredPuzzlesRaw().length;
+  countEl.textContent = n === 0 ? 'No puzzles match these filters yet.' : `${n} puzzle${n === 1 ? '' : 's'} match — ready to practice.`;
+}
+
+// Filtering only (severity/bookmark/label/status) — shared by the library
+// view (which then applies its own display sort) and the practice session
+// builder (which applies its own play-order instead).
+function getFilteredPuzzlesRaw() {
   let list = allPuzzles.filter((p) => libraryFilters.severities.has(p.severity));
   if (libraryFilters.bookmarkedOnly) list = list.filter((p) => p.bookmarked);
   if (libraryFilters.labels.size) list = list.filter((p) => (p.labels || []).some((l) => libraryFilters.labels.has(l)));
   if (libraryFilters.status !== 'all') list = list.filter((p) => practiceStatus(p.id) === libraryFilters.status);
-
-  if (libraryFilters.sort === 'newest') list.sort((a, b) => b.createdAt - a.createdAt);
-  else if (libraryFilters.sort === 'oldest') list.sort((a, b) => a.createdAt - b.createdAt);
-  else if (libraryFilters.sort === 'severity') list.sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.cpLoss - a.cpLoss);
   return list;
 }
 
+function timesWrong(puzzleId) {
+  return (allPractice[puzzleId] && allPractice[puzzleId].timesFailed) || 0;
+}
+
+function getFilteredPuzzles() {
+  const list = getFilteredPuzzlesRaw();
+  if (libraryFilters.sort === 'newest') list.sort((a, b) => b.createdAt - a.createdAt);
+  else if (libraryFilters.sort === 'oldest') list.sort((a, b) => a.createdAt - b.createdAt);
+  else if (libraryFilters.sort === 'severity') list.sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.cpLoss - a.cpLoss);
+  else if (libraryFilters.sort === 'mostWrong') list.sort((a, b) => timesWrong(b.id) - timesWrong(a.id));
+  return list;
+}
+
+// Builds the ordered puzzle-id queue for a Practice-tab session, using the
+// same filters as the library but the session's own play-order setting.
+function getPracticeSessionQueue() {
+  const list = getFilteredPuzzlesRaw();
+  if (sessionOrder === 'newest') list.sort((a, b) => b.createdAt - a.createdAt);
+  else if (sessionOrder === 'oldest') list.sort((a, b) => a.createdAt - b.createdAt);
+  else if (sessionOrder === 'random') {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+  } else if (sessionOrder === 'mostWrong') {
+    list.sort((a, b) => timesWrong(b.id) - timesWrong(a.id));
+  }
+  return list.map((p) => p.id);
+}
+
 function renderLibrary() {
-  renderLabelFilterChips();
+  syncFilterControls();
   const list = getFilteredPuzzles();
   const grid = el('puzzleGrid');
   el('libraryEmpty').hidden = list.length !== 0;
@@ -342,6 +443,8 @@ function buildPuzzleCard(p) {
   miniBoard.setPosition(p.fen, p.sideToMove);
 
   const status = practiceStatus(p.id);
+  const wrongCount = timesWrong(p.id);
+  const wrongNote = wrongCount > 0 ? ` · wrong ${wrongCount}×` : '';
   const body = document.createElement('div');
   body.className = 'puzzle-card-body';
   body.innerHTML = `
@@ -349,7 +452,7 @@ function buildPuzzleCard(p) {
       <span class="chip chip-sev ${p.severity} active">${SEVERITY_LABEL[p.severity]}</span>
       <button class="star-btn ${p.bookmarked ? 'active' : ''}" data-action="bookmark" title="Bookmark">${p.bookmarked ? '★' : '☆'}</button>
     </div>
-    <div class="card-meta"><span class="card-status-dot ${status}"></span>vs ${escapeHtml(p.opponentUsername || '?')} · ${formatDate(p.endTime)} · −${p.cpLoss}cp</div>
+    <div class="card-meta"><span class="card-status-dot ${status}"></span>vs ${escapeHtml(p.opponentUsername || '?')} · ${formatDate(p.endTime)} · −${p.cpLoss}cp${wrongNote}</div>
     <div class="card-labels">${(p.labels || []).map((l) => `<span class="chip chip-label active" style="cursor:default">${escapeHtml(l)}</span>`).join('')}</div>
     <div class="card-actions">
       <button class="btn btn-primary small" data-action="solve">Solve</button>
@@ -382,14 +485,10 @@ function buildPuzzleCard(p) {
 
 // ================= SOLVE =================
 function wireSolve() {
-  el('btnStartSession').addEventListener('click', () => {
-    const list = getFilteredPuzzles();
-    if (list.length === 0) { toast('No puzzles match your current filters.', 'error'); return; }
-    solveSession = { queue: list.map((p) => p.id), index: 0 };
-    loadPuzzleIntoSolver(solveSession.queue[0]);
-  });
+  el('btnPrevPuzzle').addEventListener('click', previousInSession);
   el('btnNextPuzzle').addEventListener('click', nextInSession);
   el('btnShowSolution').addEventListener('click', giveUpAndShowSolution);
+  el('btnPlayFromHere').addEventListener('click', continueFromViewedPosition);
   el('btnBookmarkSolve').addEventListener('click', async () => {
     if (!solveState) return;
     solveState.puzzle.bookmarked = !solveState.puzzle.bookmarked;
@@ -441,6 +540,12 @@ function nextInSession() {
   loadPuzzleIntoSolver(solveSession.queue[solveSession.index]);
 }
 
+function previousInSession() {
+  if (solveSession.index <= 0) { toast('This is the first puzzle in this session.'); return; }
+  solveSession.index--;
+  loadPuzzleIntoSolver(solveSession.queue[solveSession.index]);
+}
+
 function loadPuzzleIntoSolver(puzzleId) {
   const puzzle = allPuzzles.find((p) => p.id === puzzleId);
   if (!puzzle) { toast('Puzzle not found.', 'error'); return; }
@@ -454,7 +559,7 @@ function loadPuzzleIntoSolver(puzzleId) {
 
   solveState = {
     puzzle, board, solverIdx: 0, gaveUp: false,
-    branchMode: false,
+    branchMode: false, alreadySolved: false,
     reviewingBranch: null,
     viewingIndex: null,
     history: [{ fen: puzzle.fen, san: null, uci: null }],
@@ -467,6 +572,9 @@ function loadPuzzleIntoSolver(puzzleId) {
   setSolveMode('live');
   el('solveFeedback').textContent = '';
   el('solveFeedback').className = 'solve-feedback';
+
+  const inSession = solveSession.index >= 0 && solveSession.queue.length > 0;
+  el('btnPrevPuzzle').disabled = !inSession || solveSession.index <= 0;
 }
 
 // Toggles which row of controls is visible and updates the prompt/progress
@@ -513,7 +621,7 @@ function pushHistory(san, uci) {
 
 function renderMoveNav() {
   const container = el('solveMoveNav');
-  if (!solveState) { container.innerHTML = ''; return; }
+  if (!solveState) { container.innerHTML = ''; el('btnPlayFromHere').hidden = true; return; }
   const reviewing = !!solveState.reviewingBranch;
   const h = reviewing ? solveState.reviewingBranch.history : solveState.history;
   const p = solveState.puzzle;
@@ -527,6 +635,10 @@ function renderMoveNav() {
   container.querySelectorAll('.move-nav-chip').forEach((btn) => {
     btn.addEventListener('click', () => viewHistoryIndex(parseInt(btn.dataset.idx, 10)));
   });
+  // "Play from here" makes sense whenever we're looking at any position that
+  // isn't the live end of the current line — whether scrubbing back through
+  // this attempt or browsing a saved explored line.
+  el('btnPlayFromHere').hidden = solveState.viewingIndex === null;
 }
 
 function viewHistoryIndex(idx) {
@@ -545,6 +657,46 @@ function viewHistoryIndex(idx) {
     solveState.board.showPreview(entry.fen, arrows);
   }
   renderMoveNav();
+}
+
+// Forks a brand-new line starting from whatever position is currently being
+// viewed — either an earlier point in this attempt, or any point within a
+// saved explored line. From here on it's free play against the engine
+// (branch mode), and the result can be saved as its own explored line.
+function continueFromViewedPosition() {
+  if (!solveState || solveState.viewingIndex === null) return;
+  const reviewingSaved = !!solveState.reviewingBranch;
+  const h = reviewingSaved ? solveState.reviewingBranch.history : solveState.history;
+  const idx = solveState.viewingIndex;
+  const entry = h[idx];
+
+  const discardsLiveMoves = !reviewingSaved && idx < h.length - 1;
+  if (discardsLiveMoves) {
+    const ok = confirm('Continue from here? This starts a new line from this point — the moves after it in the current line will be replaced (save the current line first if you want to keep it).');
+    if (!ok) return;
+  }
+
+  solveState.reviewingBranch = null;
+  solveState.history = h.slice(0, idx + 1).map((e) => ({ fen: e.fen, san: e.san, uci: e.uci }));
+  solveState.viewingIndex = null;
+  solveState.branchMode = true;
+  solveState.alreadySolved = true; // no longer tracking toward the stored solution
+
+  solveState.board.clearPreview();
+  solveState.board.setPosition(entry.fen, solveState.puzzle.sideToMove);
+  if (entry.uci) {
+    solveState.board.lastMove = { from: entry.uci.slice(0, 2), to: entry.uci.slice(2, 4) };
+    solveState.board._render();
+  }
+
+  setSolveMode('branch');
+  renderMoveNav();
+  el('solveFeedback').textContent = 'Continuing from here — this is a new line.';
+  el('solveFeedback').className = 'solve-feedback wrong';
+
+  if (solveState.board.chess.turn() !== solveState.puzzle.sideToMove) {
+    scheduleEngineReplyInBranch();
+  }
 }
 
 function renderSolveMeta() {
@@ -633,8 +785,9 @@ async function recordPracticeOutcome(puzzleId, outcome) {
 }
 
 function handleSolverMove(move) {
-  if (!solveState || solveState.gaveUp) return;
+  if (!solveState) return;
   if (solveState.branchMode) { handleBranchMove(move); return; }
+  if (solveState.gaveUp) return; // mid-reveal animation; branchMode kicks in once it finishes
 
   const p = solveState.puzzle;
   const expected = p.solutionUci[solveState.solverIdx];
@@ -645,13 +798,17 @@ function handleSolverMove(move) {
     solveState.board.applyUci(expected);
     pushHistory(sanPlayed, expected);
     solveState.solverIdx++;
+
+    if (checkSolveThreshold()) {
+      // Solved as soon as the threshold is crossed — don't also play out any
+      // remaining scripted opponent reply; from here it's free exploration.
+      enterExploreMode(solvedMessage(), 'solved', true);
+      return;
+    }
+
     el('solveFeedback').textContent = 'Correct.';
     el('solveFeedback').className = 'solve-feedback correct';
 
-    if (solveState.solverIdx >= p.solutionSan.length) {
-      finishSolved();
-      return;
-    }
     const oppMove = p.solutionUci[solveState.solverIdx];
     if (oppMove) {
       const oppSan = p.solutionSan[solveState.solverIdx];
@@ -661,13 +818,45 @@ function handleSolverMove(move) {
         pushHistory(oppSan, oppMove);
         solveState.solverIdx++;
         updateSolveProgress();
-        if (solveState.solverIdx >= p.solutionSan.length) finishSolved();
+        if (checkSolveThreshold()) enterExploreMode(solvedMessage(), 'solved', false);
       }, 450);
     }
     updateSolveProgress();
   } else {
     startBranch(move.uci);
   }
+}
+
+function solvedMessage() {
+  return 'Puzzle solved! Anything you play from here is optional exploration.';
+}
+
+// True once the player has correctly played PLAYER_MOVES_TO_SOLVE of their
+// own moves, or the stored solution line has been fully played out —
+// whichever comes first (a short 2-ply puzzle can't wait for 3 player
+// moves that don't exist). Records the "solved" outcome exactly once.
+function checkSolveThreshold() {
+  if (solveState.alreadySolved) return false;
+  const p = solveState.puzzle;
+  const playerPliesPlayed = Math.ceil(solveState.solverIdx / 2);
+  if (playerPliesPlayed >= PLAYER_MOVES_TO_SOLVE || solveState.solverIdx >= p.solutionSan.length) {
+    solveState.alreadySolved = true;
+    recordPracticeOutcome(p.id, 'solved');
+    return true;
+  }
+  return false;
+}
+
+// Switches into free play against the engine — used both for a wrong move
+// and for "solved, keep exploring if you like." `scheduleReply` should be
+// true when it's now the engine's turn to move (i.e. this was just called
+// right after the player's own move).
+function enterExploreMode(message, cls, scheduleReply) {
+  solveState.branchMode = true;
+  setSolveMode('branch');
+  el('solveFeedback').textContent = message;
+  el('solveFeedback').className = 'solve-feedback ' + cls;
+  if (scheduleReply) scheduleEngineReplyInBranch();
 }
 
 // A wrong move no longer gets an engine explanation — it just gets flagged,
@@ -732,12 +921,6 @@ async function finalizeBranch(save) {
   loadPuzzleIntoSolver(puzzle.id);
 }
 
-function finishSolved() {
-  el('solveFeedback').textContent = 'Puzzle solved!';
-  el('solveFeedback').className = 'solve-feedback solved';
-  recordPracticeOutcome(solveState.puzzle.id, 'solved');
-}
-
 function renderBranches() {
   const container = el('branchList');
   const branches = (solveState.puzzle.branches || []).slice().sort((a, b) => b.createdAt - a.createdAt);
@@ -800,6 +983,7 @@ function exitBranchReview() {
 function giveUpAndShowSolution() {
   if (!solveState || solveState.gaveUp || solveState.branchMode) return;
   solveState.gaveUp = true;
+  solveState.alreadySolved = true; // this attempt is recorded as failed, not solved
   solveState.viewingIndex = null;
   solveState.board.clearPreview();
   const p = solveState.puzzle;
@@ -807,7 +991,13 @@ function giveUpAndShowSolution() {
   const remainingSan = p.solutionSan.slice(solveState.solverIdx);
   let i = 0;
   const step = () => {
-    if (i >= remaining.length) return;
+    if (i >= remaining.length) {
+      // Fully revealed — hand control back so the player can keep exploring
+      // (and save whatever they find) instead of the board just freezing.
+      const scheduleReply = solveState.board.chess.turn() !== solveState.puzzle.sideToMove;
+      enterExploreMode(`Solution: ${p.solutionSan.join(' ')} — keep exploring if you like.`, 'wrong', scheduleReply);
+      return;
+    }
     solveState.board.applyUci(remaining[i]);
     pushHistory(remainingSan[i], remaining[i]);
     solveState.solverIdx++;
@@ -815,10 +1005,10 @@ function giveUpAndShowSolution() {
     i++;
     setTimeout(step, 500);
   };
-  step();
   el('solveFeedback').textContent = `Solution: ${p.solutionSan.join(' ')}`;
   el('solveFeedback').className = 'solve-feedback wrong';
   recordPracticeOutcome(p.id, 'failed');
+  step();
 }
 
 // ================= STATS =================
@@ -878,6 +1068,7 @@ async function init() {
   wireImport();
   wireLibrary();
   wireSolve();
+  wirePracticeSessionFilters();
   showView(allPuzzles.length ? 'library' : 'import');
   maybeAutoCheckForNewGames(); // fire-and-forget: runs quietly in the background
 }

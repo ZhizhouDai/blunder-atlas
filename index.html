@@ -115,6 +115,7 @@
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
             <option value="severity">Most severe first</option>
+            <option value="mostWrong">Most often wrong</option>
           </select>
         </div>
         <div class="filter-group label-filter-group" id="labelFilterChips"></div>
@@ -134,8 +135,39 @@
   <!-- SOLVE VIEW -->
   <section id="view-solve" class="view">
     <div id="solveEmpty" class="empty-state">
-      <p>No puzzle selected. Head to the <button class="link-btn" id="goToLibraryFromSolve">puzzle library</button> and pick one, or start a practice session.</p>
-      <button id="btnStartSession" class="btn btn-primary">Start session from current filters</button>
+      <p>No puzzle selected. Head to the <button class="link-btn" id="goToLibraryFromSolve">puzzle library</button> to pick one, or set up a practice session below.</p>
+
+      <div class="session-setup panel">
+        <h2 class="panel-title">Practice session</h2>
+        <div class="filter-bar">
+          <div class="filter-group" id="sessionSeverityFilters">
+            <button class="chip chip-sev blunder active" data-sev="blunder">Blunders</button>
+            <button class="chip chip-sev mistake active" data-sev="mistake">Mistakes</button>
+            <button class="chip chip-sev inaccuracy active" data-sev="inaccuracy">Inaccuracies</button>
+          </div>
+          <div class="filter-group">
+            <select id="sessionStatusFilter">
+              <option value="all">All statuses</option>
+              <option value="unsolved">Unsolved</option>
+              <option value="solved">Solved</option>
+              <option value="failed">Attempted, not solved</option>
+            </select>
+            <button class="chip chip-toggle" id="sessionBookmarkedOnly">★ Bookmarked only</button>
+          </div>
+          <div class="filter-group label-filter-group" id="sessionLabelFilterChips"></div>
+          <div class="filter-group">
+            <span class="inline-label">Order:</span>
+            <select id="sessionOrder">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="random">Random shuffle</option>
+              <option value="mostWrong">Most often wrong</option>
+            </select>
+          </div>
+        </div>
+        <button id="btnStartSession" class="btn btn-primary" style="margin-top: 16px;">Start practice session</button>
+        <p class="muted" id="sessionCount" style="margin-top: 10px; text-align: center;"></p>
+      </div>
     </div>
     <div id="solveContent" class="solve-layout" hidden>
       <div class="solve-board-col">
@@ -150,7 +182,6 @@
         <p class="solve-feedback" id="solveFeedback"></p>
         <div class="solve-controls" id="liveControls">
           <button id="btnShowSolution" class="btn btn-ghost small">Show solution</button>
-          <button id="btnNextPuzzle" class="btn btn-primary small">Next puzzle →</button>
         </div>
         <div class="solve-controls" id="branchControls" hidden>
           <button id="btnSaveBranch" class="btn btn-primary small">Save this line</button>
@@ -159,7 +190,14 @@
         <div class="solve-controls" id="reviewControls" hidden>
           <button id="btnBackToPuzzle" class="btn btn-primary small">← Back to puzzle</button>
         </div>
+        <div class="solve-controls">
+          <button id="btnPrevPuzzle" class="btn btn-ghost small">← Previous puzzle</button>
+          <button id="btnNextPuzzle" class="btn btn-primary small">Next puzzle →</button>
+        </div>
         <div class="move-nav" id="solveMoveNav"></div>
+        <div class="solve-controls">
+          <button id="btnPlayFromHere" class="btn btn-ghost small" hidden>▶ Play from here</button>
+        </div>
 
         <div class="branch-section">
           <label>Explored lines</label>
