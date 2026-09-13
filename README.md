@@ -1,70 +1,47 @@
 # Blunder Atlas
 
-A local, private puzzle trainer built from your own Chess.com mistakes. Everything
-runs in your browser — your games and puzzles are stored locally (IndexedDB) and
-never leave your machine except for the read-only fetch to Chess.com's public API.
+A puzzle trainer built from your own Chess.com mistakes. Everything runs
+entirely in your browser — the chess engine is WebAssembly, your puzzles are
+stored locally (IndexedDB), and the only network calls are read-only fetches
+to Chess.com's public API. There is no backend and no account system; nothing
+about your games or puzzles is ever sent anywhere else.
 
-## Running it
+## Use it now
 
-This app lives at `C:\Users\sgdfj\Desktop\BlunderAtlas`. No Node or Python needed.
+**https://zhizhoudai.github.io/blunder-atlas/**
 
-**Easiest way:** double-click **`Start Blunder Atlas.bat`** in this folder.
+Works on any device with a modern browser — phone, tablet, laptop — with no
+setup. Just open the link.
 
-Or from a terminal in this folder:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File server.ps1
-```
-
-Then open **http://localhost:8843** in your browser on this PC. Leave the
-terminal/console window open while you use the app; closing it stops the
-server.
-
-(To use a different port: `powershell -ExecutionPolicy Bypass -File server.ps1 -Port 9000`)
-
-### Using it from your phone
-
-The server listens on your whole local network, not just this PC. While it's
-running, on a phone or other device connected to the **same Wi-Fi**, open:
-
-**http://192.168.12.104:8843** *(this PC's current network address — it can
-change if your router reassigns it; re-run the server and check the console
-output for the current one if this stops working)*
-
-This only works while your PC is on, the server is running, and both devices
-are on the same network — it won't work over cellular data or away from home.
-
-The first time a phone connects, Windows might show a **Windows Defender
-Firewall** prompt asking to allow the connection — click **Allow access**. If
-you don't see a prompt and it just doesn't load, you may need to allow it
-manually: open an **elevated** PowerShell and run:
-
-```powershell
-netsh advfirewall firewall add rule name="Blunder Atlas" dir=in action=allow protocol=TCP localport=8843
-```
-
-(I didn't run this myself — firewall changes are a system security setting,
-so that one's up to you.)
-
-**Heads up on data:** puzzles and practice history are stored locally in each
-browser (IndexedDB) — there's no shared server-side database. That means your
-phone and your PC keep **completely separate libraries**: importing games on
-your phone won't show up on your PC and vice versa. Each device is its own
-independent copy of the app.
+**Important:** puzzles and practice history are stored per-browser
+(IndexedDB), not in a shared account. Opening this same link on your phone
+and on your PC gives you **two separate, independent libraries** — importing
+games on one device does not show up on the other. This is a deliberate
+trade-off for keeping everything private and server-free.
 
 ## How it works
 
-1. **Import** — enter your Chess.com username; the app pulls your recent games
-   via Chess.com's public API (no login required).
-2. **Analyze** — [Stockfish 18](https://stockfishchess.org/) (the current NNUE
-   engine, single-threaded WASM build, running locally in your browser via a
-   Web Worker — nothing is sent to a server) replays every move you made and
-   flags inaccuracies, mistakes, and blunders by centipawn loss (≥50 / ≥100 /
-   ≥300 respectively, skipping positions that are already decided).
-3. **Puzzles** — each flagged move becomes a puzzle: the position right
+1. **Import** — enter your Chess.com username once; the app pulls your
+   recent games via Chess.com's public API (no login required) and remembers
+   the username after that.
+2. **Auto-check** — from then on, every time you open the app it silently
+   checks Chess.com for games played since your last visit and analyzes
+   anything new — no button click needed. It's throttled to at most once
+   every 15 minutes and analyzes at most 5 new games per check (so opening
+   the app after a long gap can't turn into a multi-minute background job);
+   any leftover games are simply still "new" and get picked up on the next
+   check. Every game is keyed by Chess.com's own game ID, so a game is never
+   analyzed twice no matter how many times a scan runs. The manual **Import**
+   button still works too, for a specific date range or analysis depth.
+3. **Analyze** — [Stockfish 18](https://stockfishchess.org/) (the current
+   NNUE engine, single-threaded WASM build, running locally via a Web
+   Worker) replays every move you made and flags inaccuracies, mistakes, and
+   blunders by centipawn loss (≥50 / ≥100 / ≥300 respectively, skipping
+   positions that are already decided).
+4. **Puzzles** — each flagged move becomes a puzzle: the position right
    before your mistake, with the engine's best continuation (up to 8 plies)
    as the solution.
-4. **Practice** — solve puzzles on the board (click a piece, click a
+5. **Practice** — solve puzzles on the board (click a piece, click a
    destination); the app auto-plays the opponent's best replies. If you play
    a wrong move, it's simply flagged as wrong — the move is committed for
    real and the engine replies, so you can keep playing and see for yourself
@@ -72,18 +49,48 @@ independent copy of the app.
    under **Explored lines** on the puzzle, revisited anytime, or deleted.
    Bookmark, label (e.g. "hanging piece", "missed fork"), delete, or give up
    and reveal the solution.
-5. **History** — track which puzzles you've solved, attempted but not
+6. **History** — track which puzzles you've solved, attempted but not
    solved, or never touched, broken down by severity and label. Click any
    entry in "Recent activity" to jump straight back into that puzzle.
-6. **Piece style** — pick from five sets (Classic, Merida, Alpha, Leipzig,
-   California) via the dropdown in the top bar; the choice is remembered.
 
 ## Notes
 
-- Analysis speed is adjustable (Fast / Balanced / Deep) — deeper search is
-  more accurate but slower. You can cancel an import mid-run; games already
-  analyzed keep their puzzles.
-- Only standard chess games are analyzed (variants like Chess960 are skipped).
-- Re-importing skips games you've already analyzed.
-- The engine ships as a ~7MB WASM file (`lib/stockfish-18-lite-single.wasm`),
-  vendored locally so the app works offline once loaded.
+- Analysis speed is adjustable (Fast / Balanced / Deep) for manual imports —
+  deeper search is more accurate but slower. You can cancel an import
+  mid-run; games already analyzed keep their puzzles.
+- Only standard chess games are analyzed (variants like Chess960 are
+  skipped).
+- The engine ships as a ~7MB WASM file, loaded once and cached by your
+  browser after that.
+
+## Running a local copy instead
+
+You don't need this for normal use — the hosted link above works everywhere.
+This is only for running fully offline or working on the code.
+
+This folder has everything needed; no Node or Python required.
+
+**Easiest way:** double-click **`Start Blunder Atlas.bat`**.
+
+Or from a terminal in this folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server.ps1
+```
+
+Then open **http://localhost:8843**. Leave the terminal window open while
+you use the app; closing it stops the server. (Different port: add
+`-Port 9000`.)
+
+The local server also listens on your whole local network, so a phone on the
+**same Wi-Fi** can reach it at `http://<this-PC's-LAN-IP>:8843` — check the
+server's console output for the current address. This only works while your
+PC is on, the server is running, and both devices share a network; the
+hosted link above doesn't have any of these restrictions.
+
+## Updating the deployed site
+
+The live site is a GitHub Pages deployment of this repo
+(`ZhizhouDai/blunder-atlas`, `master` branch, served from `/`). Push changes
+to `master` and GitHub rebuilds the Pages site automatically (usually live
+within a minute or two).
