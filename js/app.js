@@ -510,6 +510,7 @@ function wireSolve() {
   el('btnSaveBranch').addEventListener('click', () => finalizeBranch(true));
   el('btnDiscardBranch').addEventListener('click', () => finalizeBranch(false));
   el('btnShowHint').addEventListener('click', showBranchHint);
+  el('btnManualOpponent').addEventListener('click', toggleManualOpponent);
   el('btnBackToPuzzle').addEventListener('click', exitBranchReview);
   el('btnChangePracticeSet').addEventListener('click', changePracticeSet);
 }
@@ -578,7 +579,7 @@ function loadPuzzleIntoSolver(puzzleId) {
 
   solveState = {
     puzzle, board, solverIdx: 0, gaveUp: false,
-    branchMode: false, alreadySolved: false,
+    branchMode: false, alreadySolved: false, manualOpponent: false,
     reviewingBranch: null,
     viewingIndex: null,
     history: [{ fen: puzzle.fen, san: null, uci: null }],
@@ -602,6 +603,7 @@ function loadPuzzleIntoSolver(puzzleId) {
 function setSolveMode(mode) {
   el('liveControls').hidden = mode !== 'live';
   el('branchControls').hidden = mode !== 'branch';
+  el('branchNotesRow').hidden = mode !== 'branch';
   el('reviewControls').hidden = mode !== 'review';
 
   if (mode === 'branch') {
@@ -615,7 +617,7 @@ function setSolveMode(mode) {
     renderSolveMeta();
     updateSolveProgress();
   }
-  updateHintButton();
+  updateBranchControls();
 }
 
 // Builds "12. Nf3" / "12… Bg4" style labels from a starting move number/side
@@ -637,7 +639,7 @@ function buildMoveLabels(startMoveNumber, startSide, sanList) {
 function pushHistory(san, uci) {
   solveState.history.push({ fen: solveState.board.chess.fen(), san, uci });
   renderMoveNav();
-  updateHintButton();
+  updateBranchControls();
 }
 
 function renderMoveNav() {
@@ -678,7 +680,7 @@ function viewHistoryIndex(idx) {
     solveState.board.showPreview(entry.fen, arrows);
   }
   renderMoveNav();
-  updateHintButton();
+  updateBranchControls();
 }
 
 // Forks a brand-new line starting from whatever position is currently being
@@ -702,6 +704,7 @@ function continueFromViewedPosition() {
   solveState.history = h.slice(0, idx + 1).map((e) => ({ fen: e.fen, san: e.san, uci: e.uci }));
   solveState.viewingIndex = null;
   solveState.branchMode = true;
+  solveState.manualOpponent = false;
   solveState.alreadySolved = true; // no longer tracking toward the stored solution
 
   solveState.board.clearPreview();
@@ -717,7 +720,7 @@ function continueFromViewedPosition() {
   el('solveFeedback').className = 'solve-feedback wrong';
 
   if (solveState.board.chess.turn() !== solveState.puzzle.sideToMove) {
-    scheduleEngineReplyInBranch();
+    scheduleEngineReplyIfAuto();
   }
 }
 
@@ -878,7 +881,7 @@ function enterExploreMode(message, cls, scheduleReply) {
   setSolveMode('branch');
   el('solveFeedback').textContent = message;
   el('solveFeedback').className = 'solve-feedback ' + cls;
-  if (scheduleReply) scheduleEngineReplyInBranch();
+  if (scheduleReply) scheduleEngineReplyIfAuto();
 }
 
 // A wrong move no longer gets an engine explanation — it just gets flagged,
@@ -894,27 +897,40 @@ function startBranch(uci) {
   el('solveFeedback').textContent = 'Not the best move.';
   el('solveFeedback').className = 'solve-feedback wrong';
   setSolveMode('branch');
-  scheduleEngineReplyInBranch();
+  scheduleEngineReplyIfAuto();
 }
 
+// Handles a move played by clicking the board while in branch mode — this
+// covers both the player's own moves AND, when manual-opponent mode is on,
+// moves the user picks on the opponent's behalf. Only schedule the engine's
+// automatic reply if the move just played leaves the *opponent* to move;
+// otherwise it's the player's own turn next and they'll move themselves.
 function handleBranchMove(move) {
   const applied = solveState.board.applyUci(move.uci);
   if (!applied) return;
   pushHistory(applied.san, move.uci);
-  scheduleEngineReplyInBranch();
+  if (solveState.board.chess.turn() !== solveState.puzzle.sideToMove) {
+    scheduleEngineReplyIfAuto();
+  }
+}
+
+// Schedules the engine's move for the opponent, unless manual-opponent mode
+// is on — in which case the board just waits for the user to play it.
+function scheduleEngineReplyIfAuto() {
+  if (!solveState.manualOpponent) scheduleEngineReplyInBranch();
 }
 
 function scheduleEngineReplyInBranch() {
   const puzzleId = solveState.puzzle.id;
   setTimeout(async () => {
-    if (!solveState || !solveState.branchMode || solveState.puzzle.id !== puzzleId) return;
+    if (!solveState || !solveState.branchMode || solveState.puzzle.id !== puzzleId || solveState.manualOpponent) return;
     if (solveState.board.chess.game_over()) return;
     const fen = solveState.board.chess.fen();
     let res;
     try {
       res = await engine.analyze(fen, { movetimeMs: 500 });
     } catch (e) { return; }
-    if (!solveState || !solveState.branchMode || solveState.puzzle.id !== puzzleId) return;
+    if (!solveState || !solveState.branchMode || solveState.puzzle.id !== puzzleId || solveState.manualOpponent) return;
     if (res.bestMoveUci) {
       const applied = solveState.board.applyUci(res.bestMoveUci);
       if (applied) pushHistory(applied.san, res.bestMoveUci);
@@ -922,16 +938,52 @@ function scheduleEngineReplyInBranch() {
   }, 450);
 }
 
+// ---------- Manual opponent mode ----------
+// Lets the user take over the opponent's side for a turn (or several) to try
+// out different replies, instead of the engine always playing them. Toggling
+// back off hands the opponent's current turn (if any) straight back to the
+// engine.
+function toggleManualOpponent() {
+  if (!solveState || !solveState.branchMode) return;
+  solveState.manualOpponent = !solveState.manualOpponent;
+  updateBranchControls();
+  if (!solveState.manualOpponent && solveState.board.chess.turn() !== solveState.puzzle.sideToMove) {
+    scheduleEngineReplyInBranch();
+  }
+}
+
+function updateManualOpponentControls() {
+  const btn = el('btnManualOpponent');
+  const note = el('manualOpponentNote');
+  if (!btn || !solveState) return;
+  const disabled = !solveState.branchMode || solveState.viewingIndex !== null ||
+    solveState.board.isPreviewing || solveState.board.chess.game_over();
+  btn.disabled = disabled;
+  const manual = !!solveState.manualOpponent;
+  btn.textContent = manual ? '🤖 Let computer play' : "🧭 Explore opponent's move";
+  btn.classList.toggle('active', manual);
+  if (!note) return;
+  if (disabled || !manual) {
+    note.textContent = '';
+  } else {
+    note.textContent = solveState.board.chess.turn() === solveState.puzzle.sideToMove
+      ? 'Manual mode is on — the engine will wait for you to play the opponent too.'
+      : "Manual mode is on — pick the opponent's move.";
+  }
+}
+
 // ---------- Exploration hint ----------
-// Lets the user ask the engine what it would play next for their own side
-// while exploring — shown as an overlay arrow, without committing the move.
-// Only makes sense on the live position, in branch mode, and when it's
-// actually the player's turn (the engine's own reply is scheduled and
-// applied automatically, so there's nothing to hint at on its turn).
+// Lets the user ask the engine what it would play next — shown as an overlay
+// arrow, without committing the move. Only makes sense on the live position,
+// in branch mode, and only on a turn the user is actually about to play
+// themselves: their own side always, or the opponent's side too while manual
+// opponent mode is on (otherwise the engine's own reply is about to be
+// applied automatically, so there's nothing to hint at).
 function branchHintAvailable() {
-  return !!(solveState && solveState.branchMode && solveState.viewingIndex === null &&
-    !solveState.board.isPreviewing && !solveState.board.chess.game_over() &&
-    solveState.board.chess.turn() === solveState.puzzle.sideToMove);
+  if (!solveState || !solveState.branchMode || solveState.viewingIndex !== null ||
+    solveState.board.isPreviewing || solveState.board.chess.game_over()) return false;
+  const turn = solveState.board.chess.turn();
+  return turn === solveState.puzzle.sideToMove || !!solveState.manualOpponent;
 }
 
 function updateHintButton() {
@@ -939,6 +991,11 @@ function updateHintButton() {
   if (!btn) return;
   btn.disabled = !branchHintAvailable();
   el('hintMoveLabel').textContent = '';
+}
+
+function updateBranchControls() {
+  updateHintButton();
+  updateManualOpponentControls();
 }
 
 async function showBranchHint() {

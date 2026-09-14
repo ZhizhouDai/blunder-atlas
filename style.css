@@ -164,6 +164,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offse
 .btn-ghost:hover { background: var(--accent-soft); }
 .btn-ghost.danger { color: var(--blunder); border-color: var(--blunder-bg); }
 .btn-ghost.danger:hover { background: var(--blunder-bg); }
+.btn-ghost.active { background: var(--accent-soft); border-color: transparent; }
 .btn.small { padding: 7px 14px; font-size: 13px; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
