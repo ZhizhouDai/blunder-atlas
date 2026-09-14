@@ -1251,24 +1251,60 @@ async function showStrategyHint() {
   const box = el('strategyHintBox');
   const btn = el('btnStrategyHint');
   const puzzleId = solveState.puzzle.id;
+  // Always the LIVE position — not the puzzle's starting FEN — so the hint
+  // reflects whatever moves have already been played (correct solving moves,
+  // or a branch exploration), not just move one.
+  const currentFen = solveState.board.chess.fen();
   btn.disabled = true;
   box.hidden = false;
+
+  if (solveState.board.chess.game_over()) {
+    box.textContent = 'The game has ended in this line — checkmate, stalemate, or a draw. Nothing further to find here.';
+    btn.disabled = false;
+    return;
+  }
+
   box.textContent = 'Thinking like a coach…';
 
   const p = solveState.puzzle;
-  const colorName = p.sideToMove === 'w' ? 'White' : 'Black';
+  const fenParts = currentFen.split(' ');
+  const turnColor = fenParts[1] === 'w' ? 'White' : 'Black';
+  const moveNumber = parseInt(fenParts[5], 10) || p.moveNumber;
+  const movesPlayedSoFar = solveState.history.length - 1;
+
+  let analysis;
+  try {
+    analysis = await engine.analyze(currentFen, { movetimeMs: 600 });
+  } catch (e) {
+    if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get a hint: ${e.message}`; btn.disabled = false; }
+    return;
+  }
+  // Bail out if the position moved on while the engine was thinking.
+  if (!solveState || solveState.puzzle.id !== puzzleId || solveState.board.chess.fen() !== currentFen) return;
+
+  const { sanList } = replayUciLine(currentFen, analysis.pvUci || [], 6);
+  const suggestedLine = sanList.length ? buildMoveLabels(moveNumber, fenParts[1], sanList).join(' ') : null;
+
   const severityPhrase = p.severity === 'blunder' ? 'a blunder' : p.severity === 'mistake' ? 'a mistake' : 'an inaccuracy';
-  const solutionLine = buildMoveLabels(p.moveNumber, p.sideToMove, p.solutionSan).join(' ');
-  const prompt = [
-    'You are a friendly, concise chess coach helping a student review a mistake from their own game.',
+  const promptLines = [
+    'You are a friendly, concise chess coach helping a student review a puzzle built from a mistake in their own game.',
     '',
-    `Position (FEN): ${p.fen}`,
-    `The student is playing ${colorName} and must find the best continuation.`,
-    `In the actual game they played ${p.playedSan || 'a different move'}, ${severityPhrase} that lost about ${p.cpLoss} centipawns of evaluation.`,
-    `The engine's best continuation from this exact position is: ${solutionLine}`,
+    `This puzzle started from a position where, in the actual game, the student played ${p.playedSan || 'a different move'}, ${severityPhrase} that lost about ${p.cpLoss} centipawns of evaluation.`,
+  ];
+  if (movesPlayedSoFar > 0) {
+    promptLines.push(`Since then, ${movesPlayedSoFar} move(s) have been played (either correctly solving the puzzle, or exploring a side line) — the position below is where things actually stand right now, not the original starting position.`);
+  }
+  promptLines.push(
     '',
-    "Write a short strategic hint (3-5 sentences) that helps the student find this continuation themselves. Describe the underlying tactical or positional idea — do NOT state the literal move(s) in algebraic notation or name specific destination squares as instructions to play. Focus on what to look for (weaknesses, undefended pieces, open lines, king safety, etc.) rather than dictating exact moves. Be warm and encouraging, like a coach guiding a student's thinking, not handing over the answer.",
-  ].join('\n');
+    `Current position (FEN): ${currentFen}`,
+    `It is ${turnColor} to move, and the student is the one to move next.`,
+    suggestedLine
+      ? `The engine's best continuation from this exact current position is: ${suggestedLine}`
+      : "The engine could not find a continuation from this exact position (it may already be decided).",
+    '',
+    "Write a short strategic hint (3-5 sentences) that helps the student find this continuation themselves, based on the CURRENT position above — not on the original puzzle position. Describe the underlying tactical or positional idea — do NOT state the literal move(s) in algebraic notation or name specific destination squares as instructions to play. Focus on what to look for (weaknesses, undefended pieces, open lines, king safety, etc.) rather than dictating exact moves. Be warm and encouraging, like a coach guiding a student's thinking, not handing over the answer.",
+  );
+  const prompt = promptLines.join('\n');
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
