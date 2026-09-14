@@ -607,7 +607,9 @@ function setSolveMode(mode) {
   el('branchControls').hidden = mode !== 'branch';
   el('branchNotesRow').hidden = mode !== 'branch';
   el('reviewControls').hidden = mode !== 'review';
-  if (mode !== 'live') resetStrategyHint();
+  // strategyHintControls is intentionally NOT toggled here — the strategy
+  // hint stays available in every mode, including after the puzzle is
+  // solved or its solution has been revealed.
 
   if (mode === 'branch') {
     el('solvePrompt').textContent = 'Exploring what happens after that move — not part of the original solution.';
@@ -1234,8 +1236,9 @@ function resetStrategyHint() {
 }
 
 // Asks Claude for a coach-style strategic hint about the puzzle's actual
-// solution — the idea/plan behind it, not the moves themselves. Only
-// available during live solving (the button lives in #liveControls).
+// solution — the idea/plan behind it, not the moves themselves. Available in
+// every solving mode, including after the puzzle is solved or given up on,
+// since the underlying idea is still worth understanding either way.
 async function showStrategyHint() {
   if (!solveState) return;
   const apiKey = getApiKey();
