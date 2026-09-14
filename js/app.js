@@ -62,6 +62,7 @@ function showView(name) {
   if (name === 'library') renderLibrary();
   if (name === 'stats') renderStats();
   if (name === 'solve') { syncFilterControls(); updateSessionCount(); }
+  if (name === 'aicoach') el('apiKeyInput').value = getApiKey();
 }
 
 function wireNav() {
@@ -962,7 +963,7 @@ function updateManualOpponentControls() {
     solveState.board.isPreviewing || solveState.board.chess.game_over();
   btn.disabled = disabled;
   const manual = !!solveState.manualOpponent;
-  btn.textContent = manual ? '🤖 Let computer play' : "🧭 Explore opponent's move";
+  btn.textContent = manual ? 'Let computer play' : "Opponent's move";
   btn.classList.toggle('active', manual);
   if (!note) return;
   if (disabled || !manual) {
@@ -1214,13 +1215,9 @@ function setApiKey(key) {
 }
 
 function wireAiSettings() {
-  el('btnAiSettings').addEventListener('click', openApiKeyModal);
-  el('btnCloseApiKeyModal').addEventListener('click', closeApiKeyModal);
-  el('apiKeyModal').addEventListener('click', (e) => { if (e.target.id === 'apiKeyModal') closeApiKeyModal(); });
   el('btnSaveApiKey').addEventListener('click', () => {
     setApiKey(el('apiKeyInput').value.trim());
     toast('API key saved to this browser.');
-    closeApiKeyModal();
   });
   el('btnClearApiKey').addEventListener('click', () => {
     setApiKey('');
@@ -1228,15 +1225,6 @@ function wireAiSettings() {
     toast('API key cleared.');
   });
   el('btnStrategyHint').addEventListener('click', showStrategyHint);
-}
-
-function openApiKeyModal() {
-  el('apiKeyInput').value = getApiKey();
-  el('apiKeyModal').hidden = false;
-}
-
-function closeApiKeyModal() {
-  el('apiKeyModal').hidden = true;
 }
 
 function resetStrategyHint() {
@@ -1252,8 +1240,8 @@ async function showStrategyHint() {
   if (!solveState) return;
   const apiKey = getApiKey();
   if (!apiKey) {
-    toast('Add your Claude API key first (⚙ AI coach settings).', 'error');
-    openApiKeyModal();
+    toast('Add your Claude API key first, in the AI Coach tab.', 'error');
+    showView('aicoach');
     return;
   }
 
