@@ -131,7 +131,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 40px; }
 .field-row-split { display: flex; gap: 20px; }
 .field-col { flex: 1; }
 
-input[type="text"], select, input:not([type]) {
+input[type="text"], input[type="password"], select, input:not([type]) {
   width: 100%;
   font-family: inherit;
   /* 16px minimum keeps iOS Safari from auto-zooming the page on focus */
@@ -241,6 +241,22 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offse
 .star-btn.active { color: var(--accent); }
 .icon-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: var(--ink-soft); padding: 4px; }
 .icon-btn:hover { color: var(--blunder); }
+
+.gear-btn { background: none; border: none; cursor: pointer; font-size: 18px; color: var(--ink-soft); padding: 4px 6px; border-radius: 8px; }
+.gear-btn:hover { color: var(--ink); background: var(--accent-soft); }
+
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; z-index: 200;
+}
+.modal-panel { max-width: 480px; width: 100%; margin: 0; max-height: 90vh; overflow-y: auto; }
+
+.strategy-hint-box {
+  margin-top: 14px; padding: 14px 16px; border-radius: 12px;
+  background: var(--accent-soft); font-size: 14px; line-height: 1.55;
+  white-space: pre-wrap;
+}
 
 .load-more-row { display: flex; justify-content: center; margin-top: 24px; }
 

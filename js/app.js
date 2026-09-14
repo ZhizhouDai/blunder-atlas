@@ -590,6 +590,7 @@ function loadPuzzleIntoSolver(puzzleId) {
   renderMoveNav();
   renderBranches();
   setSolveMode('live');
+  resetStrategyHint();
   el('solveFeedback').textContent = '';
   el('solveFeedback').className = 'solve-feedback';
 
@@ -605,6 +606,7 @@ function setSolveMode(mode) {
   el('branchControls').hidden = mode !== 'branch';
   el('branchNotesRow').hidden = mode !== 'branch';
   el('reviewControls').hidden = mode !== 'review';
+  if (mode !== 'live') resetStrategyHint();
 
   if (mode === 'branch') {
     el('solvePrompt').textContent = 'Exploring what happens after that move — not part of the original solution.';
@@ -1191,6 +1193,122 @@ function renderStats() {
   });
 }
 
+// ================= AI COACH (Hint on strategy) =================
+// Blunder Atlas has no backend, so this calls Anthropic's Claude API
+// directly from the browser using an API key the user supplies and pastes
+// in themselves — stored only in this browser's localStorage, never sent
+// anywhere but straight to Anthropic. Each hint is a small, per-use cost on
+// the user's own Anthropic account, not something this app can subsidize.
+const API_KEY_STORAGE_KEY = 'ba_claude_api_key';
+const COACH_MODEL = 'claude-haiku-4-5-20251001';
+
+function getApiKey() {
+  try { return localStorage.getItem(API_KEY_STORAGE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function setApiKey(key) {
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE_KEY, key);
+    else localStorage.removeItem(API_KEY_STORAGE_KEY);
+  } catch (e) { /* private-browsing localStorage can throw — nothing to do */ }
+}
+
+function wireAiSettings() {
+  el('btnAiSettings').addEventListener('click', openApiKeyModal);
+  el('btnCloseApiKeyModal').addEventListener('click', closeApiKeyModal);
+  el('apiKeyModal').addEventListener('click', (e) => { if (e.target.id === 'apiKeyModal') closeApiKeyModal(); });
+  el('btnSaveApiKey').addEventListener('click', () => {
+    setApiKey(el('apiKeyInput').value.trim());
+    toast('API key saved to this browser.');
+    closeApiKeyModal();
+  });
+  el('btnClearApiKey').addEventListener('click', () => {
+    setApiKey('');
+    el('apiKeyInput').value = '';
+    toast('API key cleared.');
+  });
+  el('btnStrategyHint').addEventListener('click', showStrategyHint);
+}
+
+function openApiKeyModal() {
+  el('apiKeyInput').value = getApiKey();
+  el('apiKeyModal').hidden = false;
+}
+
+function closeApiKeyModal() {
+  el('apiKeyModal').hidden = true;
+}
+
+function resetStrategyHint() {
+  const box = el('strategyHintBox');
+  box.hidden = true;
+  box.textContent = '';
+}
+
+// Asks Claude for a coach-style strategic hint about the puzzle's actual
+// solution — the idea/plan behind it, not the moves themselves. Only
+// available during live solving (the button lives in #liveControls).
+async function showStrategyHint() {
+  if (!solveState) return;
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    toast('Add your Claude API key first (⚙ AI coach settings).', 'error');
+    openApiKeyModal();
+    return;
+  }
+
+  const box = el('strategyHintBox');
+  const btn = el('btnStrategyHint');
+  const puzzleId = solveState.puzzle.id;
+  btn.disabled = true;
+  box.hidden = false;
+  box.textContent = 'Thinking like a coach…';
+
+  const p = solveState.puzzle;
+  const colorName = p.sideToMove === 'w' ? 'White' : 'Black';
+  const severityPhrase = p.severity === 'blunder' ? 'a blunder' : p.severity === 'mistake' ? 'a mistake' : 'an inaccuracy';
+  const solutionLine = buildMoveLabels(p.moveNumber, p.sideToMove, p.solutionSan).join(' ');
+  const prompt = [
+    'You are a friendly, concise chess coach helping a student review a mistake from their own game.',
+    '',
+    `Position (FEN): ${p.fen}`,
+    `The student is playing ${colorName} and must find the best continuation.`,
+    `In the actual game they played ${p.playedSan || 'a different move'}, ${severityPhrase} that lost about ${p.cpLoss} centipawns of evaluation.`,
+    `The engine's best continuation from this exact position is: ${solutionLine}`,
+    '',
+    "Write a short strategic hint (3-5 sentences) that helps the student find this continuation themselves. Describe the underlying tactical or positional idea — do NOT state the literal move(s) in algebraic notation or name specific destination squares as instructions to play. Focus on what to look for (weaknesses, undefended pieces, open lines, king safety, etc.) rather than dictating exact moves. Be warm and encouraging, like a coach guiding a student's thinking, not handing over the answer.",
+  ].join('\n');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: COACH_MODEL,
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while waiting
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) || `Request failed (${res.status})`;
+      throw new Error(msg);
+    }
+    const text = ((data && data.content) || []).map((block) => block.text || '').join('').trim();
+    box.textContent = text || 'No hint returned.';
+  } catch (e) {
+    box.textContent = `Couldn't get a hint: ${e.message}`;
+  } finally {
+    if (solveState && solveState.puzzle.id === puzzleId) btn.disabled = false;
+  }
+}
+
 // ================= INIT =================
 async function init() {
   await DB.init();
@@ -1200,6 +1318,7 @@ async function init() {
   wireLibrary();
   wireSolve();
   wirePracticeSessionFilters();
+  wireAiSettings();
   showView(allPuzzles.length ? 'library' : 'import');
   maybeAutoCheckForNewGames(); // fire-and-forget: runs quietly in the background
 }
