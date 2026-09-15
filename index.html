@@ -90,6 +90,33 @@
       <div class="progress-line small" id="moveProgressLine"></div>
       <ul class="import-log" id="importLog"></ul>
     </div>
+
+    <div class="panel form-panel">
+      <h2 class="panel-title">Create a puzzle manually</h2>
+      <p class="muted" style="margin-bottom: 14px;">Paste any FEN — from a book, a lesson, or your own analysis — and the engine will work out the best continuation.</p>
+      <div class="field-row">
+        <label for="manualFen">FEN</label>
+        <input id="manualFen" type="text" placeholder="e.g. r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3" autocomplete="off" />
+      </div>
+      <div class="field-row field-row-split">
+        <div class="field-col">
+          <label for="manualSeverity">Category</label>
+          <select id="manualSeverity">
+            <option value="blunder">Blunder</option>
+            <option value="mistake" selected>Mistake</option>
+            <option value="inaccuracy">Inaccuracy</option>
+          </select>
+        </div>
+        <div class="field-col">
+          <label for="manualTitle">Title (optional)</label>
+          <input id="manualTitle" type="text" placeholder="e.g. Book position #12" autocomplete="off" />
+        </div>
+      </div>
+      <div class="field-row actions-row">
+        <button id="btnCreateManualPuzzle" class="btn btn-primary">Create puzzle</button>
+      </div>
+      <p class="muted" id="manualPuzzleStatus" style="margin-top: 10px;"></p>
+    </div>
   </section>
 
   <!-- LIBRARY VIEW -->
@@ -242,7 +269,7 @@
           <div class="label-chips label-quickadd" id="solveLabelQuickAdd"></div>
         </div>
 
-        <div class="game-link">
+        <div class="game-link" id="gameLinkRow">
           <a id="solveGameLink" href="#" target="_blank" rel="noopener">View original game on Chess.com ↗</a>
         </div>
       </div>

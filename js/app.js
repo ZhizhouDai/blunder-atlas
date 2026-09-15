@@ -108,6 +108,96 @@ function wireImport() {
   el('btnImport').addEventListener('click', runImport);
   DB.getSetting('username', '').then((u) => { if (u) el('username').value = u; });
   DB.getSetting('speedPreset', 'balanced').then((s) => { el('speedPreset').value = s; });
+  el('btnCreateManualPuzzle').addEventListener('click', createManualPuzzle);
+}
+
+// Builds a puzzle directly from a pasted FEN — no game/import involved. The
+// engine works out the solution line right away, same as it would for an
+// imported mistake; there's just no "actual game move" or opponent to record,
+// so those fields stay empty and the puzzle is flagged `manual` so the UI
+// can show a sensible label instead of "vs ?".
+async function createManualPuzzle() {
+  const fenInput = el('manualFen');
+  const statusEl = el('manualPuzzleStatus');
+  const btn = el('btnCreateManualPuzzle');
+  const fen = fenInput.value.trim();
+  if (!fen) { toast('Paste a FEN first.', 'error'); return; }
+
+  const check = new Chess().validate_fen(fen);
+  if (!check.valid) {
+    statusEl.textContent = `Invalid FEN: ${check.error}`;
+    return;
+  }
+
+  const severity = el('manualSeverity').value;
+  const title = el('manualTitle').value.trim();
+
+  btn.disabled = true;
+  statusEl.textContent = 'Analyzing position…';
+
+  try {
+    await engine.init();
+    const analysis = await engine.analyze(fen, { movetimeMs: 500 });
+    if (!analysis.bestMoveUci) {
+      statusEl.textContent = 'This position has no legal moves (checkmate or stalemate) — nothing to solve.';
+      return;
+    }
+
+    const bestSan = stripCheckMarks(uciToSanAt(fen, analysis.bestMoveUci) || '');
+    const { sanList, uciTrimmed } = replayUciLine(fen, analysis.pvUci || [], MAX_SOLUTION_PLIES);
+    if (sanList.length === 0) {
+      statusEl.textContent = "Couldn't work out a solution line from this position.";
+      return;
+    }
+
+    const fenParts = fen.split(' ');
+    const sideToMove = fenParts[1];
+    const moveNumber = parseInt(fenParts[5], 10) || 1;
+
+    const puzzle = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `manual-${Date.now()}`,
+      gameId: null,
+      fen,
+      sideToMove,
+      moveNumber,
+      playedSan: null,
+      bestSan,
+      solutionSan: sanList,
+      solutionUci: uciTrimmed,
+      severity,
+      cpLoss: 0,
+      evalBefore: analysis.scoreCp,
+      createdAt: Date.now(),
+      opponentUsername: null,
+      timeClass: null,
+      endTime: Math.floor(Date.now() / 1000),
+      gameUrl: null,
+      labels: [],
+      bookmarked: false,
+      branches: [],
+      manual: true,
+      title: title || null,
+    };
+
+    await DB.puzzles.put(puzzle);
+    await refreshData();
+    toast('Puzzle created.');
+    statusEl.innerHTML = 'Puzzle created! <button type="button" class="link-btn" id="btnSolveManualNow">Solve it now</button> or find it later in the Puzzles library.';
+    const solveNowBtn = el('btnSolveManualNow');
+    if (solveNowBtn) {
+      solveNowBtn.addEventListener('click', () => {
+        solveSession = { queue: [puzzle.id], index: 0 };
+        showView('solve');
+        loadPuzzleIntoSolver(puzzle.id);
+      });
+    }
+    fenInput.value = '';
+    el('manualTitle').value = '';
+  } catch (e) {
+    statusEl.textContent = `Couldn't create the puzzle: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 let importCancelToken = null;
@@ -446,6 +536,9 @@ function buildPuzzleCard(p) {
   const status = practiceStatus(p.id);
   const wrongCount = timesWrong(p.id);
   const wrongNote = wrongCount > 0 ? ` · wrong ${wrongCount}×` : '';
+  const metaLine = p.manual
+    ? `${escapeHtml(p.title || 'Custom position')} · ${formatDate(p.endTime)}${wrongNote}`
+    : `vs ${escapeHtml(p.opponentUsername || '?')} · ${formatDate(p.endTime)} · −${p.cpLoss}cp${wrongNote}`;
   const body = document.createElement('div');
   body.className = 'puzzle-card-body';
   body.innerHTML = `
@@ -453,7 +546,7 @@ function buildPuzzleCard(p) {
       <span class="chip chip-sev ${p.severity} active">${SEVERITY_LABEL[p.severity]}</span>
       <button class="star-btn ${p.bookmarked ? 'active' : ''}" data-action="bookmark" title="Bookmark">${p.bookmarked ? '★' : '☆'}</button>
     </div>
-    <div class="card-meta"><span class="card-status-dot ${status}"></span>vs ${escapeHtml(p.opponentUsername || '?')} · ${formatDate(p.endTime)} · −${p.cpLoss}cp${wrongNote}</div>
+    <div class="card-meta"><span class="card-status-dot ${status}"></span>${metaLine}</div>
     <div class="card-labels">${(p.labels || []).map((l) => `<span class="chip chip-label active" style="cursor:default">${escapeHtml(l)}</span>`).join('')}</div>
     <div class="card-actions">
       <button class="btn btn-primary small" data-action="solve">Solve</button>
@@ -737,10 +830,13 @@ function renderSolveMeta() {
   const badge = el('solveSevBadge');
   badge.textContent = SEVERITY_LABEL[p.severity];
   badge.className = `chip chip-sev ${p.severity} active`;
-  el('solveOpponent').textContent = `vs ${p.opponentUsername || '?'} · ${formatDate(p.endTime)} · move ${p.moveNumber}`;
+  el('solveOpponent').textContent = p.manual
+    ? `${p.title || 'Custom position'} · ${formatDate(p.endTime)} · move ${p.moveNumber}`
+    : `vs ${p.opponentUsername || '?'} · ${formatDate(p.endTime)} · move ${p.moveNumber}`;
   const side = p.sideToMove === 'w' ? 'White' : 'Black';
   el('solvePrompt').textContent = `Find the best continuation for ${side}.`;
   el('btnBookmarkSolve').textContent = p.bookmarked ? '★ Bookmarked' : '☆ Bookmark';
+  el('gameLinkRow').hidden = !p.gameUrl;
   el('solveGameLink').href = p.gameUrl || '#';
 }
 
@@ -1205,7 +1301,8 @@ function renderStats() {
     const p = allPuzzles.find((pp) => pp.id === r.puzzleId);
     if (!p) return '';
     const last = r.history && r.history.length ? r.history[r.history.length - 1].outcome : r.bestStatus;
-    return `<li class="clickable" data-puzzle-id="${p.id}"><span>${SEVERITY_LABEL[p.severity]} vs ${escapeHtml(p.opponentUsername || '?')}</span><span>${last === 'solved' ? '✓ solved' : '✗ not solved'} · ${new Date(r.lastAttemptAt).toLocaleDateString()}</span></li>`;
+    const source = p.manual ? escapeHtml(p.title || 'Custom position') : `vs ${escapeHtml(p.opponentUsername || '?')}`;
+    return `<li class="clickable" data-puzzle-id="${p.id}"><span>${SEVERITY_LABEL[p.severity]} ${source}</span><span>${last === 'solved' ? '✓ solved' : '✗ not solved'} · ${new Date(r.lastAttemptAt).toLocaleDateString()}</span></li>`;
   }).join('') : '<li class="muted">No practice activity yet.</li>';
 
   statsRecentEl.querySelectorAll('li.clickable').forEach((li) => {
