@@ -1271,6 +1271,20 @@ function getActiveMoveNavContext() {
   return { h, idx, entry, isPlayerMove };
 }
 
+// True if every move from ply 1 through `idx` exactly matches the puzzle's
+// own stored solution line — i.e. the student hasn't deviated (yet). Used so
+// the coach can reuse the puzzle's own precomputed answer instead of asking
+// the engine fresh, which occasionally disagrees with it in close positions
+// purely because the coach's live search runs for less time than the
+// (possibly deeper) search used when the puzzle was first generated.
+function movesMatchSolutionPrefix(h, idx, puzzle) {
+  if (idx > puzzle.solutionUci.length) return false;
+  for (let i = 1; i <= idx; i++) {
+    if (h[i].uci !== puzzle.solutionUci[i - 1]) return false;
+  }
+  return true;
+}
+
 // Keeps the coach button's label matched to what's currently selected in the
 // move-nav strip: "Explain this move" right after one of the student's own
 // moves, "Strategy hint" everywhere else (Start, an opponent move, or the
@@ -1314,23 +1328,33 @@ async function explainCurrentPosition(apiKey) {
   const turnColor = fenParts[1] === 'w' ? 'White' : 'Black';
   const moveNumber = parseInt(fenParts[5], 10) || p.moveNumber;
 
-  let analysis;
-  try {
-    analysis = await engine.analyze(currentFen, { movetimeMs: 600 });
-  } catch (e) {
-    if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get a hint: ${e.message}`; btn.disabled = false; }
-    return;
-  }
-  if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
+  let suggestedLine;
+  if (movesMatchSolutionPrefix(h, idx, p) && idx < p.solutionSan.length) {
+    // Still exactly on the puzzle's own solution line — reuse it verbatim
+    // instead of re-asking the engine, so this always agrees with "Show
+    // solution" rather than occasionally landing on a different top move.
+    suggestedLine = buildMoveLabels(moveNumber, fenParts[1], p.solutionSan.slice(idx)).join(' ');
+  } else {
+    // Off the solution path (or past the end of it) — there's no stored
+    // answer for this exact position anymore, so ask the engine fresh.
+    let analysis;
+    try {
+      analysis = await engine.analyze(currentFen, { movetimeMs: 600 });
+    } catch (e) {
+      if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get a hint: ${e.message}`; btn.disabled = false; }
+      return;
+    }
+    if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
 
-  if (!analysis.bestMoveUci) {
-    box.textContent = 'The game has ended in this line — checkmate, stalemate, or a draw. Nothing further to find here.';
-    btn.disabled = false;
-    return;
-  }
+    if (!analysis.bestMoveUci) {
+      box.textContent = 'The game has ended in this line — checkmate, stalemate, or a draw. Nothing further to find here.';
+      btn.disabled = false;
+      return;
+    }
 
-  const { sanList } = replayUciLine(currentFen, analysis.pvUci || [], 6);
-  const suggestedLine = sanList.length ? buildMoveLabels(moveNumber, fenParts[1], sanList).join(' ') : null;
+    const { sanList } = replayUciLine(currentFen, analysis.pvUci || [], 6);
+    suggestedLine = sanList.length ? buildMoveLabels(moveNumber, fenParts[1], sanList).join(' ') : null;
+  }
 
   const severityPhrase = p.severity === 'blunder' ? 'a blunder' : p.severity === 'mistake' ? 'a mistake' : 'an inaccuracy';
   const promptLines = [
@@ -1369,18 +1393,27 @@ async function explainSelectedMove(apiKey) {
   box.textContent = 'Thinking like a coach…';
 
   const colorName = beforeFen.split(' ')[1] === 'w' ? 'White' : 'Black';
+  const p = solveState.puzzle;
 
-  let analysis;
-  try {
-    analysis = await engine.analyze(beforeFen, { movetimeMs: 600 });
-  } catch (e) {
-    if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get an explanation: ${e.message}`; btn.disabled = false; }
-    return;
+  let bestSan, matchesEngine;
+  if (movesMatchSolutionPrefix(h, idx, p)) {
+    // This move IS the puzzle's own stored solution move at this point —
+    // it's the engine's top choice by definition, no need to ask again.
+    bestSan = p.solutionSan[idx - 1];
+    matchesEngine = true;
+  } else {
+    let analysis;
+    try {
+      analysis = await engine.analyze(beforeFen, { movetimeMs: 600 });
+    } catch (e) {
+      if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get an explanation: ${e.message}`; btn.disabled = false; }
+      return;
+    }
+    if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
+
+    bestSan = analysis.bestMoveUci ? (uciToSanAt(beforeFen, analysis.bestMoveUci) || analysis.bestMoveUci) : null;
+    matchesEngine = !!(analysis.bestMoveUci && entry.uci && analysis.bestMoveUci.slice(0, 4) === entry.uci.slice(0, 4));
   }
-  if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
-
-  const bestSan = analysis.bestMoveUci ? (uciToSanAt(beforeFen, analysis.bestMoveUci) || analysis.bestMoveUci) : null;
-  const matchesEngine = !!(analysis.bestMoveUci && entry.uci && analysis.bestMoveUci.slice(0, 4) === entry.uci.slice(0, 4));
 
   const promptLines = [
     'You are a friendly, concise chess coach helping a student understand a specific move they played while working through a puzzle from their own game.',
