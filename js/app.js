@@ -506,7 +506,7 @@ function wireSolve() {
     toast('Puzzle deleted.');
     nextInSession();
   });
-  el('btnAddSolveLabel').addEventListener('click', addLabelToCurrentPuzzle);
+  el('btnAddSolveLabel').addEventListener('click', () => addLabelToCurrentPuzzle());
   el('solveLabelInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addLabelToCurrentPuzzle(); } });
   el('btnSaveBranch').addEventListener('click', () => finalizeBranch(true));
   el('btnDiscardBranch').addEventListener('click', () => finalizeBranch(false));
@@ -533,10 +533,12 @@ function changePracticeSet() {
   updateSessionCount();
 }
 
-async function addLabelToCurrentPuzzle() {
+// `quickLabel`, when given, adds that label directly (from a quick-add chip)
+// instead of reading the text input.
+async function addLabelToCurrentPuzzle(quickLabel) {
   if (!solveState) return;
   const input = el('solveLabelInput');
-  const val = input.value.trim();
+  const val = (quickLabel !== undefined ? quickLabel : input.value).trim();
   if (!val) return;
   if (!solveState.puzzle.labels) solveState.puzzle.labels = [];
   if (!solveState.puzzle.labels.includes(val)) {
@@ -667,6 +669,7 @@ function renderMoveNav() {
   // isn't the live end of the current line — whether scrubbing back through
   // this attempt or browsing a saved explored line.
   el('btnPlayFromHere').hidden = solveState.viewingIndex === null;
+  updateStrategyHintButton();
 }
 
 function viewHistoryIndex(idx) {
@@ -753,6 +756,25 @@ function renderSolveLabels() {
       if (idx >= 0) allPuzzles[idx] = p;
       renderSolveLabels();
     });
+  });
+  renderSolveLabelSuggestions();
+}
+
+// One-click "quick add" chips for every known label not already on this
+// puzzle — the datalist on the text input doesn't show suggestions at all on
+// iOS Safari, so this is the only usable quick-pick on a phone.
+function renderSolveLabelSuggestions() {
+  const p = solveState.puzzle;
+  const container = el('solveLabelQuickAdd');
+  const applied = new Set(p.labels || []);
+  const suggestions = refreshKnownLabels().filter((l) => !applied.has(l));
+  if (!suggestions.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = suggestions.map((l) => `<button type="button" class="chip chip-label" data-label="${escapeHtml(l)}">+ ${escapeHtml(l)}</button>`).join('');
+  container.querySelectorAll('.chip-label').forEach((btn) => {
+    btn.addEventListener('click', () => addLabelToCurrentPuzzle(btn.dataset.label));
   });
 }
 
@@ -1235,10 +1257,33 @@ function resetStrategyHint() {
   box.textContent = '';
 }
 
-// Asks Claude for a coach-style strategic hint about the puzzle's actual
-// solution — the idea/plan behind it, not the moves themselves. Available in
-// every solving mode, including after the puzzle is solved or given up on,
-// since the underlying idea is still worth understanding either way.
+// Figures out which move-nav entry is currently "active" — the live end of
+// the line by default, or whatever the user has scrubbed back to — and
+// whether the move that led to it was the student's own (as opposed to the
+// opponent's, or there being no move at all yet, at "Start"). That single
+// fact decides which of the two coach actions below applies.
+function getActiveMoveNavContext() {
+  const reviewing = !!solveState.reviewingBranch;
+  const h = reviewing ? solveState.reviewingBranch.history : solveState.history;
+  const idx = solveState.viewingIndex === null ? h.length - 1 : solveState.viewingIndex;
+  const entry = h[idx];
+  const isPlayerMove = idx > 0 && entry.fen.split(' ')[1] !== solveState.puzzle.sideToMove;
+  return { h, idx, entry, isPlayerMove };
+}
+
+// Keeps the coach button's label matched to what's currently selected in the
+// move-nav strip: "Explain this move" right after one of the student's own
+// moves, "Strategy hint" everywhere else (Start, an opponent move, or the
+// live position). Any previously-shown hint is cleared, since it no longer
+// corresponds to what's now being looked at.
+function updateStrategyHintButton() {
+  const btn = el('btnStrategyHint');
+  if (!btn || !solveState) return;
+  const { isPlayerMove } = getActiveMoveNavContext();
+  btn.textContent = isPlayerMove ? 'Explain this move' : 'Strategy hint';
+  resetStrategyHint();
+}
+
 async function showStrategyHint() {
   if (!solveState) return;
   const apiKey = getApiKey();
@@ -1247,30 +1292,27 @@ async function showStrategyHint() {
     showView('aicoach');
     return;
   }
+  const { isPlayerMove } = getActiveMoveNavContext();
+  if (isPlayerMove) await explainSelectedMove(apiKey);
+  else await explainCurrentPosition(apiKey);
+}
 
+// Forward-looking: "what should be played from here" — for the live
+// position, the puzzle's start, or an opponent move being looked at.
+async function explainCurrentPosition(apiKey) {
   const box = el('strategyHintBox');
   const btn = el('btnStrategyHint');
   const puzzleId = solveState.puzzle.id;
-  // Always the LIVE position — not the puzzle's starting FEN — so the hint
-  // reflects whatever moves have already been played (correct solving moves,
-  // or a branch exploration), not just move one.
-  const currentFen = solveState.board.chess.fen();
+  const { h, idx, entry } = getActiveMoveNavContext();
+  const currentFen = entry.fen;
   btn.disabled = true;
   box.hidden = false;
-
-  if (solveState.board.chess.game_over()) {
-    box.textContent = 'The game has ended in this line — checkmate, stalemate, or a draw. Nothing further to find here.';
-    btn.disabled = false;
-    return;
-  }
-
   box.textContent = 'Thinking like a coach…';
 
   const p = solveState.puzzle;
   const fenParts = currentFen.split(' ');
   const turnColor = fenParts[1] === 'w' ? 'White' : 'Black';
   const moveNumber = parseInt(fenParts[5], 10) || p.moveNumber;
-  const movesPlayedSoFar = solveState.history.length - 1;
 
   let analysis;
   try {
@@ -1279,8 +1321,13 @@ async function showStrategyHint() {
     if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get a hint: ${e.message}`; btn.disabled = false; }
     return;
   }
-  // Bail out if the position moved on while the engine was thinking.
-  if (!solveState || solveState.puzzle.id !== puzzleId || solveState.board.chess.fen() !== currentFen) return;
+  if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
+
+  if (!analysis.bestMoveUci) {
+    box.textContent = 'The game has ended in this line — checkmate, stalemate, or a draw. Nothing further to find here.';
+    btn.disabled = false;
+    return;
+  }
 
   const { sanList } = replayUciLine(currentFen, analysis.pvUci || [], 6);
   const suggestedLine = sanList.length ? buildMoveLabels(moveNumber, fenParts[1], sanList).join(' ') : null;
@@ -1291,21 +1338,72 @@ async function showStrategyHint() {
     '',
     `This puzzle started from a position where, in the actual game, the student played ${p.playedSan || 'a different move'}, ${severityPhrase} that lost about ${p.cpLoss} centipawns of evaluation.`,
   ];
-  if (movesPlayedSoFar > 0) {
-    promptLines.push(`Since then, ${movesPlayedSoFar} move(s) have been played (either correctly solving the puzzle, or exploring a side line) — the position below is where things actually stand right now, not the original starting position.`);
+  if (idx > 0) {
+    promptLines.push(`Since then, ${idx} move(s) have been played (either correctly solving the puzzle, or exploring a side line) — the position below is where things stand at the point being looked at right now, not the original starting position.`);
   }
   promptLines.push(
     '',
-    `Current position (FEN): ${currentFen}`,
+    `Position (FEN): ${currentFen}`,
     `It is ${turnColor} to move, and the student is the one to move next.`,
     suggestedLine
-      ? `The engine's best continuation from this exact current position is: ${suggestedLine}`
+      ? `The engine's best continuation from this exact position is: ${suggestedLine}`
       : "The engine could not find a continuation from this exact position (it may already be decided).",
     '',
-    "Write a short strategic hint (3-5 sentences) that helps the student find this continuation themselves, based on the CURRENT position above — not on the original puzzle position. Describe the underlying tactical or positional idea — do NOT state the literal move(s) in algebraic notation or name specific destination squares as instructions to play. Focus on what to look for (weaknesses, undefended pieces, open lines, king safety, etc.) rather than dictating exact moves. Be warm and encouraging, like a coach guiding a student's thinking, not handing over the answer.",
+    "Write a short strategic hint (3-5 sentences) that helps the student find this continuation themselves, based on the position above. Describe the underlying tactical or positional idea — do NOT state the literal move(s) in algebraic notation or name specific destination squares as instructions to play. Focus on what to look for (weaknesses, undefended pieces, open lines, king safety, etc.) rather than dictating exact moves. Be warm and encouraging, like a coach guiding a student's thinking, not handing over the answer.",
   );
-  const prompt = promptLines.join('\n');
+  await askCoach(promptLines.join('\n'), puzzleId, apiKey);
+}
 
+// Backward-looking: "why was this move (one of the student's own, already
+// played) a good idea" — for a move-nav entry right after one of the
+// student's own moves. Deliberately does not discuss the opponent's
+// response or what to play next; it's scoped to explaining that one move.
+async function explainSelectedMove(apiKey) {
+  const box = el('strategyHintBox');
+  const btn = el('btnStrategyHint');
+  const puzzleId = solveState.puzzle.id;
+  const { h, idx, entry } = getActiveMoveNavContext();
+  const beforeFen = h[idx - 1].fen;
+  btn.disabled = true;
+  box.hidden = false;
+  box.textContent = 'Thinking like a coach…';
+
+  const colorName = beforeFen.split(' ')[1] === 'w' ? 'White' : 'Black';
+
+  let analysis;
+  try {
+    analysis = await engine.analyze(beforeFen, { movetimeMs: 600 });
+  } catch (e) {
+    if (solveState && solveState.puzzle.id === puzzleId) { box.textContent = `Couldn't get an explanation: ${e.message}`; btn.disabled = false; }
+    return;
+  }
+  if (!solveState || solveState.puzzle.id !== puzzleId) return; // moved on while thinking
+
+  const bestSan = analysis.bestMoveUci ? (uciToSanAt(beforeFen, analysis.bestMoveUci) || analysis.bestMoveUci) : null;
+  const matchesEngine = !!(analysis.bestMoveUci && entry.uci && analysis.bestMoveUci.slice(0, 4) === entry.uci.slice(0, 4));
+
+  const promptLines = [
+    'You are a friendly, concise chess coach helping a student understand a specific move they played while working through a puzzle from their own game.',
+    '',
+    `Position before the move (FEN): ${beforeFen}`,
+    `It was ${colorName}'s move.`,
+    `The student played: ${entry.san}`,
+    matchesEngine
+      ? "This matches the engine's own top choice from this position."
+      : `The engine's top choice from this position was instead: ${bestSan || '(no clear best move found)'}.`,
+    '',
+    matchesEngine
+      ? "Write a short explanation (3-5 sentences) of WHY this move is strong — the tactical or positional idea behind it — written like a coach confirming and reinforcing the student's good instinct."
+      : "Write a short explanation (3-5 sentences) of the idea behind the engine's preferred move and, briefly, what the student's move may have missed by comparison. Be encouraging, not harsh.",
+    "Do NOT describe what the opponent's best response would be, or advise on what to play next after this move — focus only on explaining THIS move itself.",
+  ];
+  await askCoach(promptLines.join('\n'), puzzleId, apiKey);
+}
+
+// Shared Claude call + result rendering for both coach actions above.
+async function askCoach(prompt, puzzleId, apiKey) {
+  const box = el('strategyHintBox');
+  const btn = el('btnStrategyHint');
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
