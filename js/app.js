@@ -1322,7 +1322,7 @@ function renderStats() {
 // anywhere but straight to Anthropic. Each hint is a small, per-use cost on
 // the user's own Anthropic account, not something this app can subsidize.
 const API_KEY_STORAGE_KEY = 'ba_claude_api_key';
-const COACH_MODEL = 'claude-haiku-4-5-20251001';
+const COACH_MODEL = 'claude-sonnet-5';
 
 function getApiKey() {
   try { return localStorage.getItem(API_KEY_STORAGE_KEY) || ''; } catch (e) { return ''; }
