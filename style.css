@@ -131,7 +131,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 40px; }
 .field-row-split { display: flex; gap: 20px; }
 .field-col { flex: 1; }
 
-input[type="text"], input[type="password"], select, input:not([type]) {
+input[type="text"], input[type="password"], select, input:not([type]), textarea {
   width: 100%;
   font-family: inherit;
   /* 16px minimum keeps iOS Safari from auto-zooming the page on focus */
@@ -142,7 +142,9 @@ input[type="text"], input[type="password"], select, input:not([type]) {
   background: var(--bg);
   color: var(--ink);
 }
-input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+textarea { resize: vertical; min-height: 90px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+input[type="file"] { width: 100%; font-size: 14px; color: var(--ink-soft); }
 
 .actions-row { display: flex; gap: 10px; margin-top: 22px; margin-bottom: 0; }
 

@@ -117,6 +117,40 @@
       </div>
       <p class="muted" id="manualPuzzleStatus" style="margin-top: 10px;"></p>
     </div>
+
+    <div class="panel form-panel">
+      <h2 class="panel-title">Import a game from a PGN file</h2>
+      <p class="muted" style="margin-bottom: 14px;">Got a game from Lichess, a tournament, or anywhere else that isn't Chess.com? Import its PGN directly and the engine will scan it for mistakes the same way.</p>
+      <div class="field-row">
+        <label for="pgnFileInput">PGN file</label>
+        <input id="pgnFileInput" type="file" accept=".pgn,text/plain" />
+      </div>
+      <div class="field-row">
+        <label for="pgnText">Or paste PGN text</label>
+        <textarea id="pgnText" rows="6" placeholder='[Event &quot;Casual game&quot;]&#10;[White &quot;you&quot;]&#10;[Black &quot;opponent&quot;]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ...'></textarea>
+      </div>
+      <div class="field-row field-row-split">
+        <div class="field-col">
+          <label for="pgnMyColor">I played</label>
+          <select id="pgnMyColor">
+            <option value="w">White</option>
+            <option value="b">Black</option>
+          </select>
+        </div>
+        <div class="field-col">
+          <label for="pgnSpeedPreset">Analysis depth</label>
+          <select id="pgnSpeedPreset">
+            <option value="fast">Fast (quick scan)</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="deep">Deep (slower, sharper)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row actions-row">
+        <button id="btnImportPgn" class="btn btn-primary">Import &amp; analyze</button>
+      </div>
+      <p class="muted" id="pgnImportStatus" style="margin-top: 10px;"></p>
+    </div>
   </section>
 
   <!-- LIBRARY VIEW -->

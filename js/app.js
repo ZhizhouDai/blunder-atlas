@@ -289,6 +289,112 @@ async function runImport() {
   }
 }
 
+// Pulls out `[Tag "value"]` header lines from a PGN — just enough to guess
+// an opponent name and a date for display, without needing a full parser.
+function parsePgnHeaders(pgn) {
+  const headers = {};
+  const re = /^\[(\w+)\s+"([^"]*)"\]/gm;
+  let m;
+  while ((m = re.exec(pgn))) headers[m[1]] = m[2];
+  return headers;
+}
+
+// Content hash used as this game's dedup key in DB.games, so re-importing
+// the exact same PGN a second time is recognized and skipped rather than
+// creating duplicate puzzles — chess.com games get this for free from their
+// own game UUID, but a pasted PGN has no such ID of its own.
+async function hashText(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function wirePgnImport() {
+  el('pgnFileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    el('pgnText').value = await file.text();
+  });
+  el('btnImportPgn').addEventListener('click', runPgnImport);
+}
+
+async function runPgnImport() {
+  if (importBusy) { toast('Already busy importing — try again in a moment.', 'error'); return; }
+  const pgn = el('pgnText').value.trim();
+  if (!pgn) { toast('Paste a PGN, or choose a file, first.', 'error'); return; }
+
+  const myColor = el('pgnMyColor').value;
+  const speed = el('pgnSpeedPreset').value;
+  const btn = el('btnImportPgn');
+  const statusEl = el('pgnImportStatus');
+
+  importBusy = true;
+  btn.disabled = true;
+  statusEl.textContent = 'Checking this game…';
+
+  try {
+    const id = 'pgn-' + (await hashText(pgn));
+    const existingGame = await DB.games.get(id);
+    if (existingGame) {
+      statusEl.textContent = 'This exact game has already been imported.';
+      return;
+    }
+
+    const testParser = new Chess();
+    const parsedOk = testParser.load_pgn(pgn, { sloppy: true });
+    if (!parsedOk || testParser.history().length === 0) {
+      statusEl.textContent = "Couldn't read this PGN — check the format and try again.";
+      return;
+    }
+
+    const headers = parsePgnHeaders(pgn);
+    const whiteName = headers.White || 'White';
+    const blackName = headers.Black || 'Black';
+    const myUsername = myColor === 'w' ? whiteName : blackName;
+    const opponentUsername = myColor === 'w' ? blackName : whiteName;
+
+    let endTime = Math.floor(Date.now() / 1000);
+    if (headers.Date) {
+      const parts = headers.Date.split(/[.\-]/).map((x) => parseInt(x, 10));
+      if (parts.length === 3 && parts.every((n) => !isNaN(n))) {
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        if (!isNaN(d.getTime())) endTime = Math.floor(d.getTime() / 1000);
+      }
+    }
+
+    const gameMeta = {
+      id, url: null, pgn, rules: 'chess', timeClass: null,
+      rated: null, endTime, myColor, myUsername,
+      myRating: null, opponentUsername, opponentRating: null,
+      result: 'unknown', resultRaw: null,
+    };
+
+    statusEl.textContent = 'Starting engine…';
+    await engine.init();
+    statusEl.textContent = 'Analyzing…';
+
+    const puzzles = await analyzeGame(gameMeta, speed, (mi, mtotal) => {
+      statusEl.textContent = mtotal ? `Analyzing move ${mi + 1} of ${mtotal}…` : 'Analyzing…';
+    }, null);
+
+    await DB.games.put(gameMeta);
+    if (puzzles.length) await DB.puzzles.putMany(puzzles);
+    await refreshData();
+
+    statusEl.textContent = `Done — found ${puzzles.length} puzzle(s) in this game.`;
+    toast(`Imported: ${puzzles.length} new puzzle(s).`);
+    el('pgnText').value = '';
+    el('pgnFileInput').value = '';
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = `Couldn't import: ${e.message}`;
+    toast(e.message, 'error');
+  } finally {
+    importBusy = false;
+    btn.disabled = false;
+  }
+}
+
 // Silently checks Chess.com for games played since the last check and
 // analyzes anything new — no button click needed. Safe to call on every app
 // load: games already in DB.games are always skipped (chess.com's game UUID
@@ -1574,6 +1680,7 @@ async function init() {
   wireSolve();
   wirePracticeSessionFilters();
   wireAiSettings();
+  wirePgnImport();
   showView(allPuzzles.length ? 'library' : 'import');
   maybeAutoCheckForNewGames(); // fire-and-forget: runs quietly in the background
 }
