@@ -648,15 +648,21 @@ function buildPuzzleCard(p) {
       <button class="star-btn ${p.bookmarked ? 'active' : ''}" data-action="bookmark" title="Bookmark">${p.bookmarked ? '★' : '☆'}</button>
     </div>
     <div class="card-meta"><span class="card-status-dot ${status}"></span>${metaLine}</div>
-    <div class="card-labels">${(p.labels || []).map((l) => `<span class="chip chip-label active" style="cursor:default">${escapeHtml(l)}</span>`).join('')}</div>
-    <div class="solution-editor" hidden></div>
+    <div class="card-labels"></div>
+    <div class="puzzle-editor" hidden>
+      <div class="solution-editor-slot"></div>
+      <div class="label-editor-slot"></div>
+    </div>
     <div class="card-actions">
       <button class="btn btn-primary small" data-action="solve">Solve</button>
-      <button class="icon-btn" data-action="edit" title="Edit solution moves">✎</button>
+      <button class="icon-btn" data-action="edit" title="Edit puzzle">✎</button>
       <button class="icon-btn" data-action="delete" title="Delete puzzle">🗑</button>
     </div>
   `;
   card.appendChild(body);
+
+  const staticLabelsEl = body.querySelector('.card-labels');
+  renderCardLabelsDisplay(p, staticLabelsEl);
 
   body.querySelector('[data-action="bookmark"]').addEventListener('click', async () => {
     p.bookmarked = !p.bookmarked;
@@ -668,10 +674,13 @@ function buildPuzzleCard(p) {
     showView('solve');
     loadPuzzleIntoSolver(p.id);
   });
-  const editorEl = body.querySelector('.solution-editor');
+  const editorEl = body.querySelector('.puzzle-editor');
   body.querySelector('[data-action="edit"]').addEventListener('click', () => {
     editorEl.hidden = !editorEl.hidden;
-    if (!editorEl.hidden) renderSolutionEditor(p, editorEl);
+    if (!editorEl.hidden) {
+      renderSolutionEditor(p, editorEl.querySelector('.solution-editor-slot'));
+      renderCardLabelEditor(p, editorEl.querySelector('.label-editor-slot'), () => renderCardLabelsDisplay(p, staticLabelsEl));
+    }
   });
   body.querySelector('[data-action="delete"]').addEventListener('click', async () => {
     if (!confirm('Delete this puzzle? This cannot be undone.')) return;
@@ -685,6 +694,73 @@ function buildPuzzleCard(p) {
   return card;
 }
 
+function renderCardLabelsDisplay(p, container) {
+  container.innerHTML = (p.labels || []).map((l) => `<span class="chip chip-label active" style="cursor:default">${escapeHtml(l)}</span>`).join('');
+}
+
+// Card-scoped label editor for the Puzzle library — lets the user add/remove
+// labels right from the card, instead of only while actively solving a
+// puzzle. `onChange` refreshes that card's own read-only label chips after
+// each edit; the top filter bar's label chips and the labels datalist are
+// kept in sync too via syncFilterControls.
+function renderCardLabelEditor(p, container, onChange) {
+  container.innerHTML = `
+    <p class="muted">Labels:</p>
+    <div class="label-chips"></div>
+    <div class="label-add-row">
+      <input type="text" placeholder="add a label…" list="knownLabels" />
+      <button type="button" class="btn btn-ghost small">Add</button>
+    </div>
+    <div class="label-chips label-quickadd"></div>
+  `;
+  const chipsEl = container.querySelector('.label-chips');
+  const inputEl = container.querySelector('input');
+  const addBtn = container.querySelector('button');
+  const quickAddEl = container.querySelector('.label-quickadd');
+
+  function renderChips() {
+    chipsEl.innerHTML = (p.labels || []).map((l) => `<span class="chip chip-label active">${escapeHtml(l)}<span class="chip-remove" data-label="${escapeHtml(l)}">✕</span></span>`).join('');
+    chipsEl.querySelectorAll('.chip-remove').forEach((x) => {
+      x.addEventListener('click', () => removeLabel(x.dataset.label));
+    });
+  }
+  function renderQuickAdd() {
+    const applied = new Set(p.labels || []);
+    const suggestions = refreshKnownLabels().filter((l) => !applied.has(l));
+    quickAddEl.innerHTML = suggestions.map((l) => `<button type="button" class="chip chip-label" data-label="${escapeHtml(l)}">+ ${escapeHtml(l)}</button>`).join('');
+    quickAddEl.querySelectorAll('.chip-label').forEach((btn) => {
+      btn.addEventListener('click', () => addLabel(btn.dataset.label));
+    });
+  }
+  async function persistAndRefresh() {
+    await DB.puzzles.put(p);
+    const idx = allPuzzles.findIndex((pp) => pp.id === p.id);
+    if (idx >= 0) allPuzzles[idx] = p;
+    renderChips();
+    renderQuickAdd();
+    syncFilterControls();
+    if (onChange) onChange();
+  }
+  async function addLabel(val) {
+    val = (val || '').trim();
+    if (!val) return;
+    if (!p.labels) p.labels = [];
+    if (!p.labels.includes(val)) p.labels.push(val);
+    inputEl.value = '';
+    await persistAndRefresh();
+  }
+  async function removeLabel(val) {
+    p.labels = (p.labels || []).filter((l) => l !== val);
+    await persistAndRefresh();
+  }
+
+  addBtn.addEventListener('click', () => addLabel(inputEl.value));
+  inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addLabel(inputEl.value); } });
+
+  renderChips();
+  renderQuickAdd();
+}
+
 // Lets the user shorten a puzzle's stored solution line, one move at a time
 // from the end — e.g. trimming a 4-move solution down to 3 also lowers how
 // many correct moves are required to solve it (see requiredPlayerMoves),
@@ -692,7 +768,7 @@ function buildPuzzleCard(p) {
 // Removing a move always removes everything after it too, since each later
 // move's position depends on every move before it — there's no such thing
 // as deleting just one move out of the middle of a played-out line.
-function renderSolutionEditor(p, container) {
+function renderSolutionEditor(p, container, onChange) {
   const labels = buildMoveLabels(p.moveNumber, p.sideToMove, p.solutionSan);
   const required = requiredPlayerMoves(p);
   container.innerHTML = `
@@ -717,7 +793,8 @@ function renderSolutionEditor(p, container) {
       const allIdx = allPuzzles.findIndex((pp) => pp.id === p.id);
       if (allIdx >= 0) allPuzzles[allIdx] = p;
       toast('Puzzle solution updated.');
-      renderSolutionEditor(p, container);
+      renderSolutionEditor(p, container, onChange);
+      if (onChange) onChange();
     });
   });
 }
@@ -743,6 +820,12 @@ function wireSolve() {
     await refreshData();
     toast('Puzzle deleted.');
     nextInSession();
+  });
+  el('btnEditSolveSolution').addEventListener('click', () => {
+    if (!solveState) return;
+    const editor = el('solveSolutionEditor');
+    editor.hidden = !editor.hidden;
+    if (!editor.hidden) renderSolutionEditor(solveState.puzzle, editor);
   });
   el('btnAddSolveLabel').addEventListener('click', () => addLabelToCurrentPuzzle());
   el('solveLabelInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addLabelToCurrentPuzzle(); } });
@@ -863,6 +946,22 @@ function setSolveMode(mode) {
     updateSolveProgress();
   }
   updateBranchControls();
+  updateEditSolutionButton();
+}
+
+// The "Edit solution" action only makes sense once the puzzle is no longer
+// being actively solved for the first time — after it's been solved
+// correctly or the solution has been revealed — since editing it mid-attempt
+// would be changing the very thing you're trying to find.
+function updateEditSolutionButton() {
+  const btn = el('btnEditSolveSolution');
+  if (!btn || !solveState) return;
+  btn.hidden = !solveState.alreadySolved;
+  if (btn.hidden) {
+    const editor = el('solveSolutionEditor');
+    editor.hidden = true;
+    editor.innerHTML = '';
+  }
 }
 
 // Builds "12. Nf3" / "12… Bg4" style labels from a starting move number/side
