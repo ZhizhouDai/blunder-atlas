@@ -21,11 +21,6 @@ const libraryFilters = {
 let libraryShown = 40;
 const LIBRARY_PAGE = 40;
 
-// A puzzle counts as solved once the player has correctly played this many
-// of their own moves, even if the stored solution line is longer — anything
-// after that point is optional exploration, not required for credit.
-const PLAYER_MOVES_TO_SOLVE = 3;
-
 let sessionOrder = 'newest'; // order for a Practice-tab session: newest/oldest/random/mostWrong
 
 let solveSession = { queue: [], index: -1 };
@@ -654,8 +649,10 @@ function buildPuzzleCard(p) {
     </div>
     <div class="card-meta"><span class="card-status-dot ${status}"></span>${metaLine}</div>
     <div class="card-labels">${(p.labels || []).map((l) => `<span class="chip chip-label active" style="cursor:default">${escapeHtml(l)}</span>`).join('')}</div>
+    <div class="solution-editor" hidden></div>
     <div class="card-actions">
       <button class="btn btn-primary small" data-action="solve">Solve</button>
+      <button class="icon-btn" data-action="edit" title="Edit solution moves">✎</button>
       <button class="icon-btn" data-action="delete" title="Delete puzzle">🗑</button>
     </div>
   `;
@@ -671,6 +668,11 @@ function buildPuzzleCard(p) {
     showView('solve');
     loadPuzzleIntoSolver(p.id);
   });
+  const editorEl = body.querySelector('.solution-editor');
+  body.querySelector('[data-action="edit"]').addEventListener('click', () => {
+    editorEl.hidden = !editorEl.hidden;
+    if (!editorEl.hidden) renderSolutionEditor(p, editorEl);
+  });
   body.querySelector('[data-action="delete"]').addEventListener('click', async () => {
     if (!confirm('Delete this puzzle? This cannot be undone.')) return;
     await DB.puzzles.delete(p.id);
@@ -681,6 +683,43 @@ function buildPuzzleCard(p) {
   });
 
   return card;
+}
+
+// Lets the user shorten a puzzle's stored solution line, one move at a time
+// from the end — e.g. trimming a 4-move solution down to 3 also lowers how
+// many correct moves are required to solve it (see requiredPlayerMoves),
+// since that's always derived from the current length of solutionSan.
+// Removing a move always removes everything after it too, since each later
+// move's position depends on every move before it — there's no such thing
+// as deleting just one move out of the middle of a played-out line.
+function renderSolutionEditor(p, container) {
+  const labels = buildMoveLabels(p.moveNumber, p.sideToMove, p.solutionSan);
+  const required = requiredPlayerMoves(p);
+  container.innerHTML = `
+    <p class="muted">Solution (${p.solutionSan.length} ply · ${required} move${required === 1 ? '' : 's'} to solve):</p>
+    <div class="label-chips">
+      ${p.solutionSan.map((san, i) => `<span class="chip chip-move" style="cursor:default">${escapeHtml(labels[i])}${i > 0 ? `<span class="chip-remove" data-idx="${i}" title="Remove this move and everything after it">✕</span>` : ''}</span>`).join('')}
+    </div>
+    ${p.solutionSan.length > 1 ? '<p class="muted">Removing a move also removes everything after it.</p>' : '<p class="muted">At least one move must remain.</p>'}
+  `;
+  container.querySelectorAll('.chip-remove').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const removedCount = p.solutionSan.length - idx;
+      const newRequired = Math.ceil(idx / 2);
+      const msg = removedCount > 1
+        ? `Remove this move and the ${removedCount - 1} move(s) after it? The puzzle will then require ${newRequired} move${newRequired === 1 ? '' : 's'} to solve instead of ${required}.`
+        : `Remove this move? The puzzle will then require ${newRequired} move${newRequired === 1 ? '' : 's'} to solve instead of ${required}.`;
+      if (!confirm(msg)) return;
+      p.solutionSan = p.solutionSan.slice(0, idx);
+      p.solutionUci = p.solutionUci.slice(0, idx);
+      await DB.puzzles.put(p);
+      const allIdx = allPuzzles.findIndex((pp) => pp.id === p.id);
+      if (allIdx >= 0) allPuzzles[allIdx] = p;
+      toast('Puzzle solution updated.');
+      renderSolutionEditor(p, container);
+    });
+  });
 }
 
 // ================= SOLVE =================
@@ -1085,15 +1124,24 @@ function solvedMessage() {
   return 'Puzzle solved! Anything you play from here is optional exploration.';
 }
 
-// True once the player has correctly played PLAYER_MOVES_TO_SOLVE of their
-// own moves, or the stored solution line has been fully played out —
-// whichever comes first (a short 2-ply puzzle can't wait for 3 player
-// moves that don't exist). Records the "solved" outcome exactly once.
+// Every one of the player's own moves in the puzzle's stored solution line
+// must be played correctly to solve it — a 4-move solution takes 4 correct
+// moves, a 2-move solution takes 2, and so on. Editing a puzzle to remove
+// moves (see editPuzzleSolution) shortens this requirement automatically,
+// since it's always derived from whatever's currently stored.
+function requiredPlayerMoves(puzzle) {
+  return Math.ceil(puzzle.solutionSan.length / 2);
+}
+
+// True once the player has correctly played every required move, or the
+// stored solution line has been fully played out — whichever comes first
+// (the two coincide in practice, this just guards against off-by-one edges).
+// Records the "solved" outcome exactly once.
 function checkSolveThreshold() {
   if (solveState.alreadySolved) return false;
   const p = solveState.puzzle;
   const playerPliesPlayed = Math.ceil(solveState.solverIdx / 2);
-  if (playerPliesPlayed >= PLAYER_MOVES_TO_SOLVE || solveState.solverIdx >= p.solutionSan.length) {
+  if (playerPliesPlayed >= requiredPlayerMoves(p) || solveState.solverIdx >= p.solutionSan.length) {
     solveState.alreadySolved = true;
     recordPracticeOutcome(p.id, 'solved');
     return true;

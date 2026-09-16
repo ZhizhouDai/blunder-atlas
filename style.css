@@ -210,6 +210,10 @@ input[type="file"] { width: 100%; font-size: 14px; color: var(--ink-soft); }
 .chip-label.active { background: var(--ink); color: var(--bg-panel); }
 .chip-remove { margin-left: 6px; cursor: pointer; opacity: 0.6; }
 .chip-remove:hover { opacity: 1; }
+.chip-move { background: var(--bg); }
+
+.solution-editor { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+.solution-editor .label-chips { margin-bottom: 6px; }
 
 .empty-state { text-align: center; padding: 60px 20px; color: var(--ink-soft); }
 .session-setup { text-align: left; max-width: 640px; margin: 28px auto 0; }
